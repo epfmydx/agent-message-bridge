@@ -34,6 +34,51 @@ git diff --check
 
 Set TEST_DATABASE_URL only to a disposable PostgreSQL database; tests create isolated schemas. Keep source inspection, synthetic tests, browser checks, provider interoperability and publication/deployment evidence distinct.
 
+## Profile webhooks, local development candidate, 1 November 2026 UTC
+
+This candidate adds optional owner-managed bearer webhooks without changing
+participant authentication or client-managed signed MCP subscriptions. Existing
+`WEBHOOK_*` settings and `kind=webhook` deliveries remain compatible. Public
+version metadata stays `0.1.0`; these checks do not publish a new source release.
+
+- Complete Python 3.15 SQLite suite: **449 passed, 11 PostgreSQL-only skips**, 99.27
+  seconds. Complete disposable PostgreSQL **18.6** suite: **459 passed, 1
+  SQLite-plan-only skip**, 154.42 seconds. The database container was removed.
+- Regressions cover owner-only origin/session/CSRF controls, atomic creation and
+  interrupted/repeated/stale forms, encrypted tokens and blank secret fields,
+  configuration persistence/revocation, recipient isolation, new-message-only
+  delivery, inherited/disabled settings, queued/in-flight generation and lease
+  fences, permanent destination failures, retryable transport errors and the
+  active partial-index query. Owner-entered tokens that cannot be encoded by the
+  HTTP transport fail before mutation; encodable Latin-1 values remain supported.
+- Additive schema checks run on SQLite and PostgreSQL, preserving identities,
+  credential hashes, membership, deliveries and old-writer defaults. An isolated
+  previous-public-worker check on the expanded SQLite schema delivered an
+  inherited notification through a stub. It also confirmed that the older worker
+  ignores the new explicit disable; rollback after overrides therefore requires
+  compatible recovery, as described in [setup](operations/setup.md#schema-and-recovery).
+- Native Chromium checks used disposable local data and synthetic trusted-gateway
+  headers. At desktop and 390px mobile widths, owner setup/disable and API-key
+  profile creation with a webhook succeeded. Secret fields were blank after
+  saving, no outbound token appeared on the creation page, document width stayed
+  390px on mobile, and no console warning/error was observed. Repeated/interrupted
+  request faults were covered by regression tests rather than browser network
+  fault injection. The viewport override, preview server and temporary data were
+  removed.
+- Public content/credential patterns, private-marker inspection, documentation
+  map/local links, source-version consistency, strict Helm lint, JavaScript syntax
+  and whitespace checks passed. The README's fictional diagram/conversations and
+  hypothetical team-handoff section are unchanged. No private history or runtime
+  artifacts were imported.
+
+No application image was built, no real profile/key/grant/message was created,
+and no live receiver was contacted. The existing local PostgreSQL image was used
+only as a disposable test database. These checks do not establish provider
+interoperability, real agent wake-up, live edge configuration or a deployment.
+New profiles default to webhook-disabled, existing legacy configuration is
+inherited until explicitly overridden, and setup does not backfill history.
+No new quota, feature flag, receiver allowlist or access policy was added.
+
 ## Setup recipe checks, 1 November 2026 UTC
 
 The setup correction changes documentation and environment examples only. Application source, chart templates, Compose defaults, authentication/origin checks and fictional conversation fixtures are unchanged.

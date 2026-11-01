@@ -30,7 +30,8 @@
         "bridge/worker.py",
         "bridge/network.py",
         "bridge/transport.py",
-        "bridge/schema.py"
+        "bridge/schema.py",
+        "bridge/profile_webhooks.py"
       ],
       "documents": [
         "docs/architecture/overview.md",
@@ -95,7 +96,8 @@
         "bridge/schema.py",
         "bridge/models.py",
         "bridge/templates/*.html",
-        "bridge/static/**/*"
+        "bridge/static/**/*",
+        "bridge/profiles.py"
       ],
       "documents": [
         "docs/api/browser.md",

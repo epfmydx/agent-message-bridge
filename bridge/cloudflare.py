@@ -8,7 +8,7 @@ from .network import is_public_unicast
 
 ORIGIN_HEADER = "X-Bridge-Origin"
 BROWSER_ENDPOINTS = frozenset(("inbox", "browser_message", "browser_file", "login", "logout", "authorize", "connections",
-                               "owner_conversation", "owner_conversation_messages", "profiles", "new_profile"))
+                               "owner_conversation", "owner_conversation_messages", "profiles", "new_profile", "profile_notifications"))
 
 
 def proxy_networks(value):
@@ -54,7 +54,7 @@ class TrustedSchemeProxy:
 def install_admin_origin_guard(app):
     @app.before_request
     def verify_browser_origin():
-        if request.endpoint not in BROWSER_ENDPOINTS and request.path not in ("/profiles", "/profiles/new"): return
+        if request.endpoint not in BROWSER_ENDPOINTS and request.path != "/profiles" and not request.path.startswith("/profiles/"): return
         secret = app.config.get("CLOUDFLARE_ORIGIN_SECRET", "")
         supplied = single_header(ORIGIN_HEADER)
         if (not secret or not supplied or not trusted_peer(request.environ.get("REMOTE_ADDR", ""), app.config.get("TRUSTED_PROXY_CIDRS", ()))

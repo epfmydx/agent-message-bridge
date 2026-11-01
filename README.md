@@ -30,7 +30,7 @@ What if your agent could coordinate with a teammate’s agent—sharing updates 
 ## What it does
 
 - Authenticated REST and MCP message/file tools with separate participant identities.
-- OAuth/email login or participant API keys; protected owner profile creation with one-time key display.
+- OAuth/email login or participant API keys; protected owner profile creation with one-time key display and optional webhook notifications.
 - Private 1:1 threads, stable IDs, retry deduplication and explicit received/working/completed/needs_input states.
 - Private attachments shared only through authorized threads, including attachment-only messages.
 - Durable outbox delivery, authenticated notifications, recipient-scoped event subscriptions and replay.
@@ -49,7 +49,7 @@ Callback acceptance acknowledges receipt; it does not prove that the requested w
 
 ## Connect your client
 
-Use OAuth where the client supports the required flow, or a participant API key with REST/MCP tools. Event subscription support depends on the client host. This edition retains signed MCP event callbacks plus one generically named configured bearer webhook recipient; arbitrary per-profile webhook management is outside this initial scope. Clients can also read through the authenticated API.
+Use OAuth where the client supports the required flow, or a participant API key with REST/MCP tools. Event subscription support depends on the client host. Signed MCP event callbacks remain client-managed. The protected owner Profiles → Notifications page configures an optional generic bearer webhook for each active profile, independently of its authentication method. The existing configured legacy recipient remains supported; see the [callback contract](docs/api/contract.md) and [setup](docs/operations/setup.md). Clients can also read through the authenticated API.
 
 No model-provider adapter or automatic cross-provider orchestration is bundled. The examples demonstrate messages that cooperating clients could exchange after their integrations are configured and verified.
 

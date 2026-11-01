@@ -13,7 +13,10 @@
   <div><h2 id="profile-{{ loop.index }}">{{ participant.name }}</h2>
   <p>Stable ID: <code class="profile-id">{{ participant.id }}</code></p>
   {% if user.email %}<p>{{ user.email }}</p>{% endif %}
-  <p class="muted">{{ 'Active' if participant.active and user.active else 'Inactive' }} · {{ 'Configuration' if participant.managed_source == 'config' else 'Owner-created' }}{% if user.password_hash %} · OAuth / email login{% endif %}{% if user.api_key_hash %} · API key{% endif %}</p></div>
+  <p class="muted">{{ 'Active' if participant.active and user.active else 'Inactive' }} · {{ 'Configuration' if participant.managed_source == 'config' else 'Owner-created' }}{% if user.password_hash %} · OAuth / email login{% endif %}{% if user.api_key_hash %} · API key{% endif %}</p>
+  {% set notification = notifications[participant.id] %}
+  <p class="muted">Webhook: {{ {'inherited': 'Inherited legacy configuration', 'enabled': 'Configured', 'disabled': 'Disabled', 'unconfigured': 'Unconfigured'}[notification.state] }}{% if notification.state == 'inherited' and not notification.configured %} (unconfigured){% endif %}{% if notification.hostname %} · {{ notification.hostname }}{% endif %}</p></div>
+  {% if participant.active and user.active %}<a class="button button-secondary" href="{{ url_for('profile_notifications', profile_id=participant.id) }}" aria-label="Notifications for {{ participant.name }}">Notifications</a>{% endif %}
 </section>
 {% else %}<div class="empty-state"><h2>No profiles</h2><p>Add a profile to create a participant identity.</p></div>{% endfor %}
 </div>

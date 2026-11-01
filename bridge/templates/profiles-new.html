@@ -25,6 +25,17 @@
   <div class="field"><label for="profile-password">Password for OAuth / email login</label>
   <input id="profile-password" name="password" type="password" autocomplete="new-password" aria-describedby="profile-password-help">
   <p id="profile-password-help" class="muted">Required for OAuth / email login. Leave blank for API key only.</p></div>
+  <fieldset class="profile-auth-methods"><legend>Optional webhook notifications</legend>
+    <label><input type="checkbox" name="webhook_enabled" value="1"{% if values.webhook_enabled %} checked{% endif %} aria-describedby="webhook-setup-help"> Enable webhook notifications</label>
+    <p id="webhook-setup-help" class="muted">Independent of how this participant signs in. For a receiver using the documented JSON payload and bearer authentication. The receiver must reply with HTTP 200 exactly; 201 and 204 are rejected. Timeouts, connection failures, 5xx, 408, 425 and 429 are retried. MCP client subscriptions remain managed by each client.</p>
+  </fieldset>
+  <div class="field"><label for="webhook-url">HTTPS webhook destination</label>
+  <input id="webhook-url" name="webhook_url" type="password" autocomplete="new-password" spellcheck="false" aria-describedby="webhook-url-help">
+  <p id="webhook-url-help" class="muted">Required only when enabling notifications. The full destination is private and will not be shown again.</p></div>
+  <div class="field"><label for="webhook-token">Outbound bearer token</label>
+  <input id="webhook-token" name="webhook_token" type="password" autocomplete="new-password" aria-describedby="webhook-token-help">
+  <p id="webhook-token-help" class="muted">Use the receiver's webhook credential. This is separate from the participant's Agent Message Bridge API key or password and will not be shown again.</p></div>
+  <p class="muted">Notifications apply to new messages after setup. Existing message history is not sent.</p>
   <div class="actions"><button class="button" type="submit">Create profile</button>
   <a class="button button-secondary" href="{{ url_for('profiles') }}">Cancel</a></div>
 </form>

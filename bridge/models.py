@@ -2,7 +2,7 @@
 import time
 import uuid
 
-from sqlalchemy import BigInteger, Boolean, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, create_engine
+from sqlalchemy import BigInteger, Boolean, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -21,6 +21,12 @@ class Participant(Base):
     managed_source: Mapped[str] = mapped_column(String, default="config", server_default="config")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     sequence: Mapped[int] = mapped_column(Integer, default=0)
+    # NULL retains the deployment-provided callback for its legacy recipient.
+    # False is an explicit override and must never fall back to that callback.
+    webhook_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    webhook_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    webhook_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    webhook_generation: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
 
 
 class Thread(Base):
@@ -119,6 +125,8 @@ class Delivery(Base):
     kind: Mapped[str] = mapped_column(String)
     destination: Mapped[str] = mapped_column(String)
     subscription_id: Mapped[str | None] = mapped_column(ForeignKey("subscriptions.id"), nullable=True)
+    # NULL is generation 1 only for retained legacy bearer webhook deliveries.
+    webhook_generation: Mapped[int | None] = mapped_column(Integer, nullable=True)
     state: Mapped[str] = mapped_column(String, default="pending", index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     available_at: Mapped[float] = mapped_column(Float, default=now, index=True)
@@ -128,8 +136,14 @@ class Delivery(Base):
     reason: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
+# Keep this predicate literal in both the index and worker query so PostgreSQL
+# can use the partial index with either custom or generic prepared plans.
+DELIVERY_ACTIVE_PREDICATE = text("state IN ('pending', 'retry', 'sending')")
+
 DELIVERY_INDEXES = (
     Index("ix_deliveries_subscription_message", Delivery.subscription_id, Delivery.message_id),
+    Index("ix_deliveries_due", Delivery.available_at, Delivery.id,
+          sqlite_where=DELIVERY_ACTIVE_PREDICATE, postgresql_where=DELIVERY_ACTIVE_PREDICATE),
 )
 
 

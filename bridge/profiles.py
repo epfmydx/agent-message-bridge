@@ -8,8 +8,10 @@ from sqlalchemy.exc import IntegrityError
 from werkzeug.security import generate_password_hash
 
 from .auth import browser_owner, browser_user, check_csrf, csrf, digest
+from .errors import Conflict, Invalid
 from .models import Participant, uid
 from .models_auth import BrowserOwner, User
+from .profile_webhooks import update_webhook, view_webhook
 
 
 def lock_profile_changes(db):
@@ -62,6 +64,15 @@ def _form_signer():
     return URLSafeSerializer(current_app.secret_key, salt="agent-message-bridge-profile-creation-v1")
 
 
+def _webhook_enabled():
+    """Accept only the checkbox's explicit boolean representation."""
+    if "webhook_enabled" not in request.form:
+        return False
+    if request.form["webhook_enabled"] != "1":
+        abort(400)
+    return True
+
+
 def install_profiles(app):
     @app.get("/profiles")
     def profiles():
@@ -90,7 +101,62 @@ def install_profiles(app):
             cursor = _signer().dumps(dict(purpose="profiles", owner=digest("owner:" + owner.id),
                                          page_size=size, anchor=rows[-1][0].id))
             next_url = url_for("profiles", page_size=size, cursor=cursor)
-        return render_template("profiles.html", rows=rows, next_url=next_url)
+        notifications = {participant.id: view_webhook(current_app.config, participant)
+                         for participant, _ in rows}
+        return render_template("profiles.html", rows=rows, next_url=next_url,
+                               notifications=notifications)
+
+    @app.route("/profiles/notifications", methods=["GET", "POST"])
+    def profile_notifications():
+        owner = _owner()
+        if not owner:
+            return redirect(url_for("login"))
+        if set(request.args) != {"profile_id"} or len(request.args.getlist("profile_id")) != 1:
+            abort(400)
+        profile_id = request.args["profile_id"]
+        error = None
+        status = 200
+        if request.method == "POST":
+            check_csrf()
+            if any(len(request.form.getlist(key)) != 1 for key in request.form):
+                abort(400)
+            enabled = _webhook_enabled()
+            generation = request.form.get("expected_generation", "")
+            if not generation.isascii() or not generation.isdecimal() or generation.startswith("0"):
+                abort(400)
+            try:
+                generation = int(generation)
+            except ValueError:
+                abort(400)
+            lock_profile_changes(g.db)
+            if not _owner():
+                return redirect(url_for("login"))
+        statement = select(Participant).where(Participant.id == profile_id)
+        if request.method == "POST":
+            statement = statement.with_for_update()
+        participant = g.db.scalar(statement)
+        user = g.db.get(User, profile_id)
+        if not participant or not participant.active or not user or not user.active:
+            abort(404)
+        if request.method == "POST":
+            try:
+                with g.db.begin_nested():
+                    update_webhook(g.db, current_app.config, participant, enabled=enabled,
+                                   url=request.form.get("webhook_url", ""),
+                                   token=request.form.get("webhook_token", ""),
+                                   expected_generation=generation)
+            except Invalid:
+                error = "Enter an HTTPS destination and its outbound bearer token. A new destination requires a new token."
+                status = 400
+            except Conflict:
+                error = "These settings changed since this form was opened. Review the current status before saving again."
+                status = 409
+            else:
+                g.db.commit()
+                return redirect(url_for("profile_notifications", profile_id=profile_id), code=303)
+        return render_template("profile-notifications.html", participant=participant,
+                               notification=view_webhook(current_app.config, participant),
+                               error=error, csrf_token=csrf()), status
 
     @app.route("/profiles/new", methods=["GET", "POST"])
     def new_profile():
@@ -104,6 +170,7 @@ def install_profiles(app):
             creation_token = _form_signer().dumps(dict(owner=owner.id, purpose="create-profile",
                                                        nonce=secrets.token_urlsafe(32)))
             values["auth_mode"] = "oauth"
+            values["webhook_enabled"] = False
         else:
             check_csrf()
             creation_token = request.form.get("creation_token", "")
@@ -117,6 +184,7 @@ def install_profiles(app):
                 abort(400)
             if any(len(request.form.getlist(key)) != 1 for key in request.form):
                 abort(400)
+            values["webhook_enabled"] = _webhook_enabled()
             name, ident = values["name"].strip(), values["profile_id"].strip()
             email = values["email"].strip().casefold() or None
             mode = values["auth_mode"]
@@ -150,15 +218,24 @@ def install_profiles(app):
                     # marker. A duplicate race cannot leave a partial profile.
                     try:
                         with g.db.begin_nested():
-                            g.db.add(Participant(id=ident, name=name, managed_source="database"))
+                            participant = Participant(id=ident, name=name, managed_source="database",
+                                                      webhook_enabled=False)
+                            g.db.add(participant)
                             g.db.flush()
                             g.db.add(User(id=ident, email=email, managed_source="database",
                                           password_hash=generate_password_hash(password) if mode == "oauth" else "",
                                           api_key_hash=digest(raw_key) if raw_key else None,
                                           creation_token_hash=token_hash))
                             g.db.flush()
+                            if values["webhook_enabled"]:
+                                update_webhook(g.db, current_app.config, participant, enabled=True,
+                                               url=request.form.get("webhook_url", ""),
+                                               token=request.form.get("webhook_token", ""),
+                                               expected_generation=1)
                     except IntegrityError:
                         error = "That ID, email or form has already been used. Open a new form or choose different details."
+                    except (Invalid, Conflict):
+                        error = "Enter an HTTPS destination and its outbound bearer token to enable webhook notifications."
                     else:
                         # Commit before exposing the key. Failure cannot render
                         # success or persist a raw credential in a cookie.

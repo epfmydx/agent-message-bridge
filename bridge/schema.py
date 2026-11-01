@@ -103,6 +103,15 @@ def _profile_columns(connection):
         if table == "oauth_users" and "creation_token_hash" not in names:
             connection.exec_driver_sql("ALTER TABLE oauth_users ADD COLUMN creation_token_hash VARCHAR")
     connection.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS uq_oauth_users_creation_token_hash ON oauth_users (creation_token_hash)")
+    names = {c["name"] for c in inspect(connection).get_columns("participants")}
+    for name, definition in (("webhook_enabled", "BOOLEAN"), ("webhook_url", "TEXT"),
+                             ("webhook_token", "TEXT"), ("webhook_generation", "INTEGER NOT NULL DEFAULT 1")):
+        if name not in names:
+            connection.exec_driver_sql("ALTER TABLE participants ADD COLUMN " + name + " " + definition)
+    if "deliveries" in inspect(connection).get_table_names():
+        columns = {c["name"] for c in inspect(connection).get_columns("deliveries")}
+        if "webhook_generation" not in columns:
+            connection.exec_driver_sql("ALTER TABLE deliveries ADD COLUMN webhook_generation INTEGER")
 
 
 def ensure_profile_schema(engine):

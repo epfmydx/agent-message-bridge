@@ -107,8 +107,11 @@ def send_message(db, settings, owner, params):
         for sub in db.scalars(select(Subscription).where(Subscription.owner_id == recipient_id, Subscription.active.is_(True),
                              or_(Subscription.expires_at.is_(None), Subscription.expires_at > now()))):
             db.add(Delivery(message_id=row.id, kind="mcp", destination="mcp:"+sub.id, subscription_id=sub.id))
-        if recipient_id == settings["WEBHOOK_PARTICIPANT_ID"]:
-            db.add(Delivery(message_id=row.id, kind="webhook", destination="webhook:"+recipient_id))
+        from .profile_webhooks import generation, should_notify
+        if should_notify(settings, recipient):
+            kind = "webhook"
+            db.add(Delivery(message_id=row.id, kind=kind, destination=kind+":"+recipient_id,
+                            webhook_generation=generation(recipient)))
     db.flush()
     return {**serialize(db, row), "duplicate": False}
 

@@ -39,13 +39,13 @@ Claims accept `claim_id`, unique to the processing run. If `acquired=false`, ano
 
 REST validation errors return 400, conflicting message identity returns 409, and unavailable message/thread resources return 404. Authentication returns 401 with OAuth protected-resource metadata. MCP returns JSON-RPC errors; callback verification failure is `-32015` with a categorized reason. Missing or unauthorized files return 404. Retryable file storage/download failures return 503 with `Retry-After: 5`; an in-progress file lease remains 409. MCP file failures retain their JSON-RPC error shape. Tool arguments are checked against their declared types and string minimum lengths; attachment-only messages may use an empty `text`. Internal exceptions never return raw dependency messages.
 
-## MCP events and configured webhook
+## MCP events and profile webhooks
 
 `POST /mcp` supports `initialize`, `server/discover`, `ping`, `tools/list`, `tools/call`, `events/list`, `events/subscribe`, and `events/unsubscribe`. Event support is advertised in both discovery paths. GET/DELETE streaming sessions are not required by this JSON-over-HTTP implementation.
 
 Subscribe to `bridge.message.received` with `arguments: {}`. The authenticated identity selects the inbox; there is no caller-supplied recipient filter that could subscribe to another participant. A supporting client host supplies the webhook URL and `whsec_` signing secret. The bridge verifies a signed challenge before saving delivery authority. Events are signed with Standard Webhooks using the exact serialized body, fresh attempt timestamp and stable event ID.
 
-configured webhook client's configured webhook receives the same reference envelope, with its sender key in Authorization rather than an MCP subscription signature:
+A profile's generic bearer webhook receives an HTTP POST with `Content-Type: application/json` and `Authorization: Bearer <outbound_token>`, using the following reference envelope. Its token is separate from the recipient's bridge API credential and the signed MCP subscription secret:
 
 ```json
 {
@@ -64,7 +64,9 @@ configured webhook client's configured webhook receives the same reference envel
 }
 ```
 
-The receiving routine reads `data.message_id` through the bridge API/MCP, then claims any work before delegation. The configured bearer webhook's HTTP 200 means receipt was accepted, according to its consumer contract. MCP 2xx means event receipt; a client host may process asynchronously. Neither means that a report, deployment or other work completed.
+The receiving routine reads `data.message_id` through the bridge API/MCP, then claims any work before delegation. The bearer webhook requires exactly HTTP 200 for accepted receipt. HTTP 201 and 204 are terminal rejections, as are other nontransient HTTP responses. Network failures, timeouts, HTTP 408, 425, 429 and 5xx retry; a permanently invalid destination is terminal. Callbacks retain the existing public HTTPS/DNS/TLS checks and reject redirects. MCP 2xx means event receipt; a client host may process asynchronously. Neither means that a report, deployment or other work completed.
+
+Owner-managed webhooks apply only to new `needs_reply=true` messages; enabling or changing settings does not backfill history. Delivery rows retain `kind=webhook` and destination `webhook:<participant_id>`. A generation change fences unsent older deliveries and prevents late results from accepting them; it cannot recall a request already in flight. Explicit disable suppresses legacy fallback. Signed MCP subscriptions and their replay remain client-managed and independent of these settings.
 
 Subscriptions default to 24 hours when ttlMs is omitted. Positive requested lifetimes are honored, and null grants no expiration. Refresh resumes stored gaps; opaque signed cursors support replay and cannot skip pending work. Terminal and stopped deliveries also pin that cursor until their existing operator/refresh recovery succeeds; later deliveries do not silently settle the gap. Secrets rotate with a five-minute overlap. An unreadable current stored signing secret stops the affected delivery with `secret_unreadable`; other destinations continue. A verified refresh repairs that subscription and resumes its stopped work. An unreadable previous overlap secret is omitted while the valid current secret continues signing; refresh clears the unreadable previous value. Expired subscriptions pause their queued deliveries until refreshed; they do not delete messages. Configure the receiving participant to treat message content as data and retain its existing action permissions.
 
