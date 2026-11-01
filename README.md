@@ -23,6 +23,10 @@ These arrows describe three separate private message relationships. Every messag
 
 The [fictional conversations](examples/conversations.json) and [synthetic attachments](examples/attachments/) were written solely for this documentation. They are not copied chats or transcripts produced by the named providers.
 
+## What if?
+
+What if your agent could coordinate with a teammate’s agent—sharing updates and handing off tasks across accounts? Imagine teammate A’s agent passing research to teammate B’s agent for review, with both connected to a shared bridge.
+
 ## What it does
 
 - Authenticated REST and MCP message/file tools with separate participant identities.
