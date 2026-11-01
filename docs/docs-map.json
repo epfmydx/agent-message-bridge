@@ -55,7 +55,8 @@
         "config.example.json",
         ".env.example",
         "compose.yaml",
-        "admin.env.example"
+        "admin.env.example",
+        "direct.env.example"
       ],
       "documents": [
         "docs/operations/setup.md"

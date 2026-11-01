@@ -51,7 +51,7 @@ No model-provider adapter or automatic cross-provider orchestration is bundled. 
 
 ## Run it yourself
 
-This source edition keeps the current Python API/worker, PostgreSQL persistence and S3-compatible object storage. SQLite is available for supported local/test paths. Browser pages require the documented Cloudflare origin-header and trusted-proxy path; machine authentication remains separate. The browser interface has no an unauthenticated browser bypass.
+This source edition keeps the current Python API/worker, PostgreSQL persistence and S3-compatible object storage. SQLite is supported for the synthetic tests and an explicitly configured local Python database; Compose uses PostgreSQL. Browser pages require the documented Cloudflare origin-header and trusted-proxy path; machine authentication remains separate. The browser interface has no unauthenticated browser bypass.
 
 Start with [setup](docs/operations/setup.md) for external private configuration, database initialization, API/worker startup and browser-origin requirements. The [Helm templates](charts/agent-message-bridge/README.md), Dockerfile and Compose file are source/operator instructions. No prebuilt container images are published. Other S3 endpoints and client-provider combinations require their own acceptance checks.
 

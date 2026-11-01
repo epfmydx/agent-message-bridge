@@ -27,7 +27,7 @@ MCP, REST, OAuth discovery/registration/token/revocation, static assets and heal
 4. Set `TRUSTED_PROXY_CIDRS` to the narrow app-facing gateway addresses/ranges observed by the app's socket. In a gateway-based cluster this is usually the gateway peer, not Cloudflare's public edge ranges. Wildcard `/0` trust is rejected.
 5. Supply `CLOUDFLARE_ORIGIN_SECRET` to the API only, restart/roll out the API, and verify `/login` through the public hostname. A direct request without the authenticated path must fail. Sign in with your configured personal owner email/password for the full bridge overview, or a participant's credentials for its shared history.
 
-The origin secret must contain 32–256 URL-safe characters. `scripts.setup_runtime` generates it in the external `admin.env` file (mode0600), separate from common runtime values. Compose loads it only into the API. Add the actual gateway CIDRs to that file; the generated list is empty so the helper cannot guess network trust.
+The origin secret must contain 32–256 URL-safe characters. `scripts.setup_runtime` generates it in the external `admin.env` file (mode 0600), separate from common runtime values. Compose loads it only into the API. Add the actual gateway CIDRs to that file; the generated list is empty so the helper cannot guess network trust.
 
 For Helm, create the dedicated existing Secret named by `adminOrigin.secretName` (default `agent-message-bridge-admin-origin`) with key `adminOrigin.secretKey` (default `CLOUDFLARE_ORIGIN_SECRET`). Set `adminOrigin.trustedProxyCidrs` in private deployment values. The chart injects these only into the API. The Secret reference is optional so missing configuration closes the browser pages without blocking machine APIs; it does not disable the guard. Keep the origin secret out of `existingEnvSecret`, which is shared with worker/init workloads. The chart does not create a public ingress or configure Cloudflare.
 
@@ -36,6 +36,8 @@ For rotation, replace the dedicated secret in Cloudflare and the API runtime, th
 ## Diagnose a denied browser request
 
 `403 cloudflare_proxy_required` means a missing/incorrect origin value, an untrusted socket peer, or absent configuration. Verify both the rule's hostname/overwrite action and the app-facing peer/CIDRs. Orange-cloud DNS alone does not satisfy origin authentication. Inspect ingress configuration or sanitized peer diagnostics; never log the origin header or private runtime values.
+
+The client-IP check requires a public unicast address. Reserved documentation ranges such as `203.0.113.10`, loopback and private addresses do not satisfy it. Local tests use synthetic public-IP header values without contacting those addresses; that is not permission to accept arbitrary caller headers in a deployment.
 
 `403 cloudflare_https_required` means the trusted path did not preserve a single HTTPS protocol header. `400 invalid_cloudflare_client_ip` means the client-IP header was absent, combined, malformed or non-public. Investigate the complete proxy chain rather than accepting caller-supplied replacement values.
 

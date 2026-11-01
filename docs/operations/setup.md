@@ -1,55 +1,140 @@
 # Setup and recovery
 
-Use Python 3.15, PostgreSQL and this project's API/worker. S3-compatible storage is needed for attachments; text messages can operate without storage configuration. Browser pages require the documented Cloudflare origin path; generic REST/MCP machine authentication is separate. Other client hosts and S3 endpoints require their own acceptance checks.
+Run the commands below from the repository root in Bash. Use Python 3.15 and a PostgreSQL database/role that you own and have already provisioned for this application. A direct Python process, Compose container and Kubernetes Pod need different database addresses and file paths; do not reuse those settings blindly. S3-compatible storage is needed for attachments; text messages can operate without it. Browser pages additionally require the [Cloudflare origin path](cloudflare.md); machine REST/MCP authentication is separate.
 
-## Private configuration
+## Generate private configuration
 
-Keep all actual configuration and credentials outside the checkout. Install local dependencies with:
+Keep actual configuration and credentials outside the checkout. Install the pinned dependencies:
 
 ```sh
-python -m venv .venv
+python3.15 -m venv .venv
 .venv/bin/python -m pip install -r requirements.lock -r requirements-dev.txt
 ```
 
-Generate a private initial configuration, supplying your own addresses and public HTTPS origin:
+Generate the initial private files, replacing the synthetic addresses and origin with your own:
 
 ```sh
-.venv/bin/python -m scripts.setup_runtime "$HOME/.config/agent-message-bridge" \
+BRIDGE_RUNTIME_DIR="$HOME/.config/agent-message-bridge"
+.venv/bin/python -m scripts.setup_runtime "$BRIDGE_RUNTIME_DIR" \
   --base-url https://bridge.example.com \
   --agent-a-email agent-a@example.com --agent-b-email agent-b@example.com \
   --owner-email owner@example.com
 ```
 
-Passwords are prompted and secrets are written into the private directory, never printed. The helper refuses a destination inside source and refuses overwriting existing files. It creates a participant API key, a different participant password hash, separate owner login, database/session/encryption material and a distinct API-only origin secret. Replace the synthetic addresses and origin with your own. The sample file contains environment references, not real credentials.
+Passwords are prompted. Secrets are written into the private directory rather than printed. The helper refuses a destination inside source and refuses overwriting existing runtime files. It creates participant authentication material, separate owner login, database/session/encryption material and an API-only origin secret. It does not create a PostgreSQL role/database or configure a proxy.
 
-`BRIDGE_CONFIG` identifies the JSON config. Participants specify stable id/name/email plus `api_key_env` and/or `password_hash_env`. `webhook_participant_id` selects the single configured bearer-webhook recipient; `WEBHOOK_URL` and `WEBHOOK_TOKEN` are a separate outgoing notification credential pair. Until configured, eligible webhook deliveries retry with `webhook_not_configured`; authenticated messages remain stored/readable. Signed MCP subscriptions are managed independently by each participant.
+| Generated file | Purpose |
+| --- | --- |
+| `.env` | Common settings and Compose interpolation paths. Its database host is the Compose service `postgres`, and `BRIDGE_CONFIG` is the container path `/run/bridge/config.json`. |
+| `config.json` | Participant/owner metadata and references to credential environment variables. |
+| `admin.env` | API-only origin secret and initially empty trusted-proxy CIDRs. Fill actual gateway CIDRs before browser sign-in. |
 
-`DATABASE_URL`, `BASE_URL`, `SESSION_SECRET` and `ENCRYPTION_KEY` are required. Storage uses `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`; either supply the complete set or leave them empty. Preserve `ENCRYPTION_KEY` while stored callback secrets depend on it. Do not put the API-only `CLOUDFLARE_ORIGIN_SECRET`/`TRUSTED_PROXY_CIDRS` in shared worker/init environment. See [browser origin protection](cloudflare.md).
+The checked-in [`.env.example`](../../.env.example), [`admin.env.example`](../../admin.env.example) and [`config.example.json`](../../config.example.json) are manual templates, not generated credentials or a ready deployment. The generated `.env` already contains `POSTGRES_PASSWORD`, `BRIDGE_ENV_FILE`, `BRIDGE_CONFIG_FILE` and `BRIDGE_ADMIN_ENV_FILE`, which Compose requires. Keep its Compose settings unchanged when also running direct Python processes.
 
-## Initialize and run
+`DATABASE_URL`, `BASE_URL`, `SESSION_SECRET` and `ENCRYPTION_KEY` are required. Configuration references must also exist: the initial example uses `AGENT_A_API_KEY`, `AGENT_B_PASSWORD_HASH` and `OWNER_PASSWORD_HASH`. This includes both participant and owner references, not only the four common values. Preserve `ENCRYPTION_KEY` while stored callback secrets depend on it.
 
-For a direct Python deployment, load the external settings into the process environment and run `python -m bridge init-db` before starting `python -m bridge serve` and `python -m bridge worker` as separate processes. `serve` uses Gunicorn on port 8000. Start each process with only its required settings; browser origin values belong to API only. Health/readiness uses `/healthz` and checks database access.
+`webhook_participant_id` selects the single configured bearer-webhook recipient; `WEBHOOK_URL` and `WEBHOOK_TOKEN` are separate outgoing credentials. Until configured, eligible webhook deliveries retry with `webhook_not_configured`; stored messages remain readable. Signed MCP subscriptions are participant-managed. Storage uses the complete `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` set, or leaves all empty.
 
-The optional Compose instructions build the local application from source on your own machine; this repository supplies no published image. They use the external env/config paths generated above:
+## Direct Python processes
+
+First provision your own PostgreSQL role/database with the schema privileges needed by `init-db`. The generated `postgres` hostname belongs to Compose DNS, not to this host; do not try that hostname from a direct process. Your direct URL must name your intended server, port, role and database, including the provider's TLS options when applicable. The application initializes its schema but does not provision the database or login role.
+
+Create a private copy of [the host override template](../../direct.env.example). This command refuses to overwrite an existing file:
 
 ```sh
-docker compose --env-file "$HOME/.config/agent-message-bridge/.env" build api
-docker compose --env-file "$HOME/.config/agent-message-bridge/.env" run --rm worker python -m bridge init-db
-docker compose --env-file "$HOME/.config/agent-message-bridge/.env" up -d api worker
+BRIDGE_RUNTIME_DIR="$HOME/.config/agent-message-bridge"
+(umask 077; set -C; cat direct.env.example > "$BRIDGE_RUNTIME_DIR/direct.env")
 ```
 
-These are operator build instructions, not evidence that an image was built for this source-only release. Configure the real database and browser origin before exposing the service; Compose binds API to 127.0.0.1:8000. The source Helm chart likewise requires an image you build in your own registry and existing Secrets. It provisions no database, bucket, credentials, public Gateway or network policy.
+Edit only that private `direct.env` copy: replace the whole `DATABASE_URL` placeholder with your intended PostgreSQL URL. Percent-encode reserved characters in URL credentials. Its `BRIDGE_CONFIG` expression uses the generated host-side `BRIDGE_CONFIG_FILE`; it does not use `/run/bridge/config.json`. Keep credentials out of shell history and Git.
 
-## Owner profiles and participants
+In each fresh terminal used for init, API or worker, run this loader from the repository root. Source only private files you created and control:
 
-Sign in as the separate owner and open Profiles → Add profile. Choose OAuth/email login (email/password required) or API key only (email optional). A generated API key is displayed once and stored only as a hash. The owner receives no participant/API identity, cannot consent for a participant, and does not add new profiles to existing threads. Add further participants through the owner UI; any authenticated participant can create a new private pair thread.
+```sh
+BRIDGE_RUNTIME_DIR="$HOME/.config/agent-message-bridge"
+set -a
+. "$BRIDGE_RUNTIME_DIR/.env"
+. "$BRIDGE_RUNTIME_DIR/direct.env"
+set +a
+unset CLOUDFLARE_ORIGIN_SECRET TRUSTED_PROXY_CIDRS
+```
 
-Database-managed profiles survive `sync-config`; configured identity removal/password or API-key rotation retains revocation semantics. Configuration cannot take over a database-managed profile. Use stable IDs to avoid treating display names as authentication. Each model/client integration supplies its own host-side authority and notification behavior. Do not seed the fictional examples into a live deployment merely to read them.
+The override must be loaded last. Before continuing, confirm that the private URL names your intended server and that `BRIDGE_CONFIG` names the host file; do not print either file into logs or issues. Initialize before starting the processes:
 
-## Schema, upgrades and rollback
+```sh
+.venv/bin/python -m bridge init-db
+```
 
-`init-db` creates missing tables and applies the explicit idempotent upgrades before synchronizing configuration. Existing-schema support includes participant/user management provenance, nullable email for key-only profiles, a nullable unique creation-token hash, browser indexes and durable delivery/login state. PostgreSQL upgrades are transactional and use bounded lock waits; failures prevent new runtime startup. SQLite upgrade tests cover retained data, views, triggers, foreign keys and rollback. `sync-config` alone does not upgrade schema.
+Successful initialization prints `Bridge configuration synchronized`. Running it again is idempotent. `sync-config` synchronizes configured identities after initialization; it does not upgrade schema.
 
-Use the intended new runtime's `init-db` before starting that runtime. Retain expanded schema and current credentials for runtime rollback; do not run an older provenance-unaware initialization/sync against owner-created profiles, because it can disable them and erase API-key hashes. The Helm hook is pre-install/pre-upgrade. A compatible stored Helm runtime rollback should suppress hooks and must be checked against its actual schema. This source edition makes no production rollback claim. Never attach this fresh installation to an unrelated deployment/database.
+In the API terminal, repeat the shared loader, load the separate API settings and start the server:
 
-Work claims do not expire automatically. After a crash, inspect the prior outcome before using the operator `release-claim` command for an exact message/claim. Do not create a new claim ID to bypass an active owner. Queued notifications are at least once; accepted callbacks mean receipt, not work completion. See [the API](../api/contract.md).
+```sh
+set -a
+. "$BRIDGE_ADMIN_ENV_FILE"
+set +a
+.venv/bin/python -m bridge serve
+```
+
+`serve` binds `0.0.0.0:8000`; keep it behind the intended private listener/proxy and firewall path. After startup, `curl --fail http://127.0.0.1:8000/healthz` returns a JSON `status: ok` when database access works. This endpoint does not establish browser-origin configuration.
+
+In a different terminal, repeat only the shared loader and run:
+
+```sh
+.venv/bin/python -m bridge worker
+```
+
+The worker may remain quiet when no notifications are queued. `.venv/bin/python -m bridge status` reports delivery counts (`{}` for an empty queue). The API-only origin settings must stay out of init/worker environments.
+
+SQLite is also usable for local Python tests with an explicitly chosen `sqlite:////absolute/path/bridge.sqlite` URL. The published Compose stack uses PostgreSQL; SQLite tests do not prove PostgreSQL locking or a production deployment.
+
+## Compose
+
+Compose uses the generated `.env` directly; do not apply `direct.env` to it. It creates its `bridge` role/database through the PostgreSQL service settings and uses the container config mount. From the repository root:
+
+```sh
+BRIDGE_RUNTIME_DIR="$HOME/.config/agent-message-bridge"
+docker compose --env-file "$BRIDGE_RUNTIME_DIR/.env" config --quiet
+docker compose --env-file "$BRIDGE_RUNTIME_DIR/.env" build api
+docker compose --env-file "$BRIDGE_RUNTIME_DIR/.env" run --rm worker python -m bridge init-db
+docker compose --env-file "$BRIDGE_RUNTIME_DIR/.env" up -d api worker
+```
+
+The repository publishes source rather than application images. These are operator build instructions, not a claim that an image was built during source validation. Compose publishes API only on `127.0.0.1:8000`; browser sign-in still needs the origin path below. To stop this installation while retaining its database volume, use `docker compose --env-file "$BRIDGE_RUNTIME_DIR/.env" down`. Adding `-v` deletes the persistent database volume and is not an ordinary shutdown step.
+
+## Helm
+
+See the [chart prerequisites and environment checklist](../../charts/agent-message-bridge/README.md). Supply your own image and existing environment/config/origin Secrets, a cluster-reachable PostgreSQL URL and the intended private ingress/proxy. The chart mounts config at its container path and runs `init-db` as a pre-install/pre-upgrade hook before API/worker replacement. It creates no database, role, bucket, credentials, Gateway or network policy. Do not turn the generated Compose `.env` into a cluster Secret unchanged.
+
+## Owner profiles and browser sign-in
+
+Before opening `/login`, complete the [browser origin configuration](cloudflare.md#configure-the-complete-origin-path), including actual app-facing proxy CIDRs in the API settings. An empty generated trust list intentionally returns `403 cloudflare_proxy_required`, even on localhost or Compose; the [denial guide](cloudflare.md#diagnose-a-denied-browser-request) explains the checks. Health or machine API success does not mean browser origin setup is complete. There is no unprotected browser-development switch; the local synthetic checks below exercise the contract without a live edge.
+
+After the trusted HTTPS path works, sign in as the separate owner and open Profiles → Add profile. Choose OAuth/email login (email/password required) or API key only (email optional). A generated key is displayed once and stored only as a hash. The owner receives no participant/API identity, cannot consent for a participant and does not add profiles to existing threads. Any authenticated participant can create a new private pair thread.
+
+Database-managed profiles survive `sync-config`; configured removal/password or key rotation retains revocation semantics. Configuration cannot take over a database-managed profile. Keep stable IDs separate from display names. Client hosts retain their own authority; do not seed fictional conversations into a live deployment merely to read them.
+
+For local synthetic guard and browser-contract checks, without configuring a real edge:
+
+```sh
+.venv/bin/python -m pytest -q tests/test_cloudflare.py tests/test_owner_auth.py
+```
+
+These tests supply synthetic trusted-peer/header values and do not establish a production proxy path or authorize trusting browser-supplied headers.
+
+## Schema and recovery
+
+`init-db` creates missing tables and applies explicit idempotent upgrades before syncing config. Existing-schema support includes profile provenance, nullable key-only email, unique creation-token hashes and durable delivery/login state. PostgreSQL column/table upgrades use transactions with bounded lock waits. The dedicated browser/delivery/login index upgrades use separately coordinated concurrent PostgreSQL builds. Initialization must succeed before starting the new runtime. SQLite tests cover retained data/views/triggers/FKs and rollback. `sync-config` alone is not a schema upgrade.
+
+Use the intended runtime's `init-db` before that runtime. Retain expanded schema and credentials for a compatible runtime rollback; older provenance-unaware initialization/sync can disable owner-created profiles and erase API-key hashes. Do not run it during fallback. Only one public release currently exists; existing-schema tests are not evidence of an upgrade between public releases.
+
+For a separately verified compatible stored Helm revision, replace all placeholders before use:
+
+```sh
+helm --kube-context CONTEXT --namespace NAMESPACE rollback RELEASE REVISION \
+  --no-hooks --wait --timeout 10m
+```
+
+Suppressing hooks does not undo a schema upgrade or make incompatible code safe. This guide makes no production rollback claim. Never attach the installation to an unrelated database.
+
+Work claims do not auto-expire. After a crash, inspect the prior outcome before `release-claim` for an exact message/claim; do not choose a new claim ID to bypass active work. Queued notifications are at least once; callback acceptance is receipt rather than completion. See [the API](../api/contract.md).

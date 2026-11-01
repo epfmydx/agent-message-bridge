@@ -33,3 +33,14 @@ git diff --check
 ```
 
 Set TEST_DATABASE_URL only to a disposable PostgreSQL database; tests create isolated schemas. Keep source inspection, synthetic tests, browser checks, provider interoperability and publication/deployment evidence distinct.
+
+## Setup recipe checks, 1 November 2026 UTC
+
+The setup correction changes documentation and environment examples only. Application source, chart templates, Compose defaults, authentication/origin checks and fictional conversation fixtures are unchanged.
+
+- Pinned Python 3.15 focused setup, browser-origin, owner-authentication and chart suite: **82 passed** against local SQLite/synthetic clients. Missing origin configuration still denies browser routes before database access; these tests do not establish a live Cloudflare path.
+- The guide's extracted generation, protected-copy, shared-loader and `init-db` commands passed against a disposable loopback PostgreSQL **18.6** database. The private override was mode 0600 and a repeated copy refused overwrite; the loader expanded the host config path and kept origin values out of init/worker settings. A synthetic API request stored one private-pair message with `needs_reply=false` and zero deliveries. Repeated `init-db` and `sync-config` retained the 16-table schema, valid/ready indexes, identities and all rows; `status` returned `{}`. Temporary runtime files and the database container were removed.
+- Generated-file Compose configuration rendered in memory with the `postgres` service hostname, container config mount, API-only origin value and loopback API bind. No application build or Compose startup was run.
+- Documentation map/local links, source content/credential-pattern check, strict Helm lint, source-version plan and whitespace checks passed. Bash syntax passed for all ten setup command blocks and both common/direct environment templates. Chart rendering remains offline; no cluster installation or recovery was performed.
+
+No application image was built, no live credentials/accounts/messages were created and no deployment was attempted. Provider-specific acceptance, a full Compose startup and a live Helm rollback remain outside these checks. No limits, restrictions or behavioral defaults were added.
