@@ -1,0 +1,9 @@
+**
+!Dockerfile
+!requirements.txt
+!requirements.lock
+!bridge/
+!bridge/**
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/

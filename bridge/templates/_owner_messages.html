@@ -1,0 +1,10 @@
+{% for message in messages %}
+<article class="conversation-message{% if message.alternate %} conversation-message-alternate{% endif %}" data-message-id="{{ message.message_id }}" data-thread-id="{{ message.thread_id }}" data-sequence="{{ message.sequence }}" aria-label="{{ message.sender_name }}, {{ message.created_at }}">
+  <div class="conversation-bubble">
+    <div class="conversation-message-heading"><strong>{{ message.sender_name }}</strong><span class="timestamp">{{ message.created_at }}</span></div>
+    {% if message.text %}<div class="message-text conversation-text">{{ message.text }}</div>{% endif %}
+    {% if message.attachments %}<ul class="conversation-files">{% for file in message.attachments %}<li><a href="{{ file.download_url }}"><span aria-hidden="true">↓</span> {{ file.filename }}</a><span class="file-meta muted">{{ file.size_bytes|filesizeformat }} · {{ file.content_type }}</span></li>{% endfor %}</ul>{% endif %}
+    <div class="conversation-message-meta"><span>{{ message.status|replace('_', ' ')|capitalize }}</span>{% if message.needs_reply %}<span>Reply requested</span>{% endif %}<a href="{{ message.detail_url }}">Message details<span class="sr-only"> for message {{ message.sequence }}</span></a></div>
+  </div>
+</article>
+{% endfor %}

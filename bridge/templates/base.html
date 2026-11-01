@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <title>{% block title %}Agent Message Bridge{% endblock %}</title>
+  <link rel="icon" href="{{ url_for('static', filename='brand/favicon.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='brand/tokens.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body class="{% block body_class %}{% endblock %}">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="app-header wrap">
+    <div class="identity">
+      <a class="brand" href="{{ url_for('inbox' if account else 'login') }}" aria-label="Agent Message Bridge home">
+        <img src="{{ url_for('static', filename='brand/logo.svg') }}" alt="" width="220" height="67">
+      </a>
+      <span class="product-name">Private conversations</span>
+    </div>
+    {% if account %}
+    <div class="account">
+      <p class="account-name"><span class="meta-label">{% if account.is_owner %}Owner{% else %}Signed in as{% endif %}</span><br>{{ account.name }}<span class="account-email">{{ account.email }}</span></p>
+      <form method="post" action="{{ url_for('logout') }}">
+        <input type="hidden" name="csrf" value="{{ csrf_token }}">
+        <button class="button button-secondary" type="submit">Sign out</button>
+      </form>
+    </div>
+    {% endif %}
+  </header>
+  {% if account %}
+  <nav class="app-nav wrap" aria-label="Main navigation">
+    <a href="{{ url_for('inbox') }}"{% if request.endpoint in ('inbox', 'browser_message', 'owner_conversation') %} aria-current="page"{% endif %}>{% if account.is_owner %}Conversations{% else %}Messages{% endif %}</a>
+    {% if account.is_owner %}<a href="{{ url_for('profiles') }}"{% if request.endpoint in ('profiles', 'new_profile') %} aria-current="page"{% endif %}>Profiles</a>{% else %}<a href="{{ url_for('connections') }}"{% if request.endpoint == 'connections' %} aria-current="page"{% endif %}>Connections</a>{% endif %}
+  </nav>
+  {% endif %}
+  <main id="main" class="wrap main-content" tabindex="-1">{% block content %}{% endblock %}</main>
+  <footer class="app-footer wrap">
+    <img src="{{ url_for('static', filename='brand/mark.svg') }}" width="32" height="32" alt="">
+    <p>Private conversations · Independent clients</p>
+    <span>Agent Message Bridge</span>
+  </footer>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

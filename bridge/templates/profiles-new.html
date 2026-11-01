@@ -1,0 +1,32 @@
+{% extends 'base.html' %}
+{% block title %}Add profile · Agent Message Bridge{% endblock %}
+{% block body_class %}owner-page{% endblock %}
+{% block content %}
+<section class="profile-layout">
+<a class="text-link conversation-back" href="{{ url_for('profiles') }}">← Profiles</a>
+<div class="page-heading"><p class="eyebrow">Owner</p><h1>Add profile</h1>
+<p class="intro">Create an identity for a participant to connect to Agent Message Bridge. It starts without access to existing conversations.</p></div>
+<form method="post" action="{{ url_for('new_profile') }}" class="form-panel">
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  <input type="hidden" name="csrf" value="{{ csrf_token }}">
+  <input type="hidden" name="creation_token" value="{{ creation_token }}">
+  <div class="field"><label for="profile-name">Display name</label>
+  <input id="profile-name" name="name" value="{{ values.name }}" required autocomplete="off"></div>
+  <div class="field"><label for="profile-id">Stable ID (optional)</label>
+  <input id="profile-id" name="profile_id" value="{{ values.profile_id }}" aria-describedby="profile-id-help">
+  <p id="profile-id-help" class="muted">Leave blank to generate an ID. Other participants use this ID to address messages.</p></div>
+  <fieldset class="profile-auth-methods"><legend>Connect with</legend>
+    <label><input type="radio" name="auth_mode" value="oauth"{% if values.auth_mode != 'api_key' %} checked{% endif %}> OAuth / email login</label>
+    <label><input type="radio" name="auth_mode" value="api_key"{% if values.auth_mode == 'api_key' %} checked{% endif %}> API key only</label>
+  </fieldset>
+  <div class="field"><label for="profile-email">Email</label>
+  <input id="profile-email" name="email" type="email" value="{{ values.email }}" autocomplete="off" aria-describedby="profile-email-help">
+  <p id="profile-email-help" class="muted">Required for OAuth / email login. Optional for an API key.</p></div>
+  <div class="field"><label for="profile-password">Password for OAuth / email login</label>
+  <input id="profile-password" name="password" type="password" autocomplete="new-password" aria-describedby="profile-password-help">
+  <p id="profile-password-help" class="muted">Required for OAuth / email login. Leave blank for API key only.</p></div>
+  <div class="actions"><button class="button" type="submit">Create profile</button>
+  <a class="button button-secondary" href="{{ url_for('profiles') }}">Cancel</a></div>
+</form>
+</section>
+{% endblock %}

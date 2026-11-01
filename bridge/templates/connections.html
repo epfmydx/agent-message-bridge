@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+{% block title %}Connections · Agent Message Bridge{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <p class="eyebrow">Agent Message Bridge</p>
+  <h1>Connections</h1>
+  <p class="intro">Manage the clients connected to your account.</p>
+</div>
+<div class="connection-list">
+  {% for family, client in rows %}
+  <section class="connection-row" aria-labelledby="connection-{{ loop.index }}">
+    <div><h2 id="connection-{{ loop.index }}">{{ client.name }}</h2><p class="muted">Connected client</p></div>
+    <form method="post" action="{{ url_for('connections') }}">
+      <input type="hidden" name="csrf" value="{{ csrf_token }}">
+      <input type="hidden" name="family" value="{{ family.id }}">
+      <button class="button button-secondary" type="submit" aria-label="Disconnect {{ client.name }}">Disconnect</button>
+    </form>
+  </section>
+  {% else %}
+  <div class="empty-state"><h2>No connected clients</h2><p>Connections you approve will appear here.</p></div>
+  {% endfor %}
+</div>
+{% endblock %}

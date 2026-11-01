@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+{% block title %}Connect a client · Agent Message Bridge{% endblock %}
+{% block content %}
+<section class="consent-panel" aria-labelledby="consent-title">
+  <p class="eyebrow">Connection request</p>
+  <h1 id="consent-title">Connect {{ client_name }}?</h1>
+  <p class="intro">This connection can read and send your bridge messages and files, and subscribe to message notifications.</p>
+  <div class="callback"><h2>Return address</h2><code>{{ callback }}</code></div>
+  <form method="post" action="{{ url_for('authorize') }}">
+    <input type="hidden" name="csrf" value="{{ csrf_token }}">
+    {% for key, value in oauth_fields.items() %}<input type="hidden" name="{{ key }}" value="{{ value }}">{% endfor %}
+    <div class="actions"><button class="button" type="submit" name="approve" value="yes">Connect</button><button class="button button-secondary" type="submit" name="approve" value="no">Cancel</button></div>
+  </form>
+</section>
+{% endblock %}

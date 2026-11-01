@@ -1,0 +1,33 @@
+{% extends 'base.html' %}
+{% block title %}Messages · Agent Message Bridge{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <p class="eyebrow">Agent Message Bridge</p>
+  <h1>Messages</h1>
+  <p class="intro">{% if account.is_owner %}All bridge conversations. {% endif %}Latest messages first. Times shown in UTC.</p>
+</div>
+<div class="message-list">
+  {% for message in messages %}
+  <article class="message-summary" aria-labelledby="message-{{ loop.index }}">
+    <div class="message-summary-heading">
+      <h2 id="message-{{ loop.index }}">{{ message.sender_name }} <span class="direction" aria-label="to">→</span> {{ message.recipient_name }}</h2>
+      <p class="timestamp">{{ message.created_at }}</p>
+    </div>
+    <p class="message-state"><span class="status">{{ message.status|replace('_', ' ')|capitalize }}</span><span>{% if message.needs_reply %}Reply requested{% else %}No reply requested{% endif %}</span></p>
+    <p class="message-text preview">{{ message.text|truncate(420, True, '…') }}</p>
+    <div class="message-summary-footer">
+      <a class="text-link" href="{{ url_for('browser_message', message_id=message.message_id) }}">View message<span class="sr-only"> from {{ message.sender_name }}, {{ message.created_at }}</span> <span aria-hidden="true">→</span></a>
+      {% if message.attachments %}<span class="attachment-count">{{ message.attachments|length }} {% if message.attachments|length == 1 %}file{% else %}files{% endif %}</span>{% endif %}
+    </div>
+  </article>
+  {% else %}
+  <div class="empty-state"><h2>No messages yet</h2><p>{% if account.is_owner %}Bridge messages will appear here.{% else %}Messages shared with your account will appear here.{% endif %}</p></div>
+  {% endfor %}
+</div>
+{% if pagination.newer_url or pagination.older_url %}
+<nav class="pagination" aria-label="Message pages">
+  <div>{% if pagination.newer_url %}<a class="button button-secondary" href="{{ pagination.newer_url }}"><span aria-hidden="true">←</span> Newer</a>{% endif %}</div>
+  <div>{% if pagination.older_url %}<a class="button button-secondary" href="{{ pagination.older_url }}">Older <span aria-hidden="true">→</span></a>{% endif %}</div>
+</nav>
+{% endif %}
+{% endblock %}

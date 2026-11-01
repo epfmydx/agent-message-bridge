@@ -1,0 +1,20 @@
+{% extends 'base.html' %}
+{% block title %}Conversation · Agent Message Bridge{% endblock %}
+{% block body_class %}owner-page owner-conversation-page{% endblock %}
+{% block content %}
+<section class="owner-conversation" data-owner-conversation data-thread-id="{{ thread.thread_id }}" data-older-url="{{ older_url or '' }}" data-newer-url="{{ newer_url }}">
+  <a class="text-link conversation-back" href="{{ list_url }}" data-back-list><span aria-hidden="true">←</span> Conversations</a>
+  <header class="conversation-heading"><div><p class="eyebrow">Conversation</p><h1>{{ thread.participant_names|join(' ↔ ') or 'No participants' }}</h1></div><span class="owner-readonly">Owner view · Read only</span></header>
+  <details class="conversation-thread-id"><summary>Thread details</summary><p>{{ thread.thread_id }}</p></details>
+  <div class="conversation-shell">
+    <div class="conversation-scroll" role="region" aria-label="Conversation messages" tabindex="0" data-message-scroll>
+      <div class="conversation-history-control"><a class="button button-secondary" href="{{ older_page_url or url_for('owner_conversation', thread_id=thread.thread_id, page_size=page_size) }}" data-load-older{% if not older_url %} hidden{% endif %}>Load older messages</a><p class="muted" data-history-status{% if older_url %} hidden{% endif %}>Beginning of conversation</p><a href="{{ url_for('login') }}" data-sign-in hidden>Sign in to continue</a></div>
+      <div class="conversation-messages" data-messages>{% include '_owner_messages.html' %}</div>
+      {% if not messages %}<div class="conversation-empty" data-conversation-empty><h2>No messages yet</h2><p>New messages will appear here.</p></div>{% endif %}
+    </div>
+    <div class="conversation-toolbar"><p role="status" aria-live="polite" aria-atomic="true" data-conversation-status>Latest messages</p><button class="button button-secondary" type="button" data-jump-latest hidden>Jump to latest ↓</button><button class="text-button" type="button" data-check-new>Check for new messages</button></div>
+  </div>
+  <noscript><nav class="pagination" aria-label="Conversation history pages">{% if older_page_url %}<a class="button button-secondary" href="{{ older_page_url }}">Older messages</a>{% endif %}{% if newer_page_url %}<a class="button button-secondary" href="{{ newer_page_url }}">Newer messages</a>{% endif %}<a class="text-link" href="{{ url_for('owner_conversation', thread_id=thread.thread_id, page_size=page_size) }}">Latest messages</a></nav></noscript>
+</section>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='owner-conversations.js') }}" defer></script>{% endblock %}

@@ -1,0 +1,17 @@
+{% extends 'base.html' %}
+{% block title %}Profile created · Agent Message Bridge{% endblock %}
+{% block body_class %}owner-page{% endblock %}
+{% block content %}
+<section class="profile-layout profile-created">
+<div class="page-heading"><p class="eyebrow">Profiles</p><h1>Profile created</h1><p class="intro">{{ name }}</p></div>
+<p>Stable ID: <code class="profile-id">{{ profile_id }}</code></p>
+{% if api_key %}
+<section aria-labelledby="key-heading"><h2 id="key-heading">Save this API key now</h2>
+<p id="key-help">This key is shown once. Copy it and store it securely before leaving this page.</p>
+<label class="sr-only" for="profile-api-key">API key</label>
+<textarea class="profile-key" rows="3" readonly spellcheck="false" aria-describedby="key-help" id="profile-api-key">{{ api_key }}</textarea>
+<p>Use it as the bearer credential for this participant.</p></section>
+{% else %}<p>The participant can sign in with their email and password and approve their own OAuth connections.</p>{% endif %}
+<div class="actions"><a class="button" href="{{ url_for('profiles') }}">Back to profiles</a><a class="button button-secondary" href="{{ url_for('inbox') }}">Conversations</a></div>
+</section>
+{% endblock %}

@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agent-message-bridge.fullname" . }}-worker
+  labels:
+    {{- include "agent-message-bridge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      {{- include "agent-message-bridge.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "agent-message-bridge.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: worker
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: {{ include "agent-message-bridge.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "bridge", "worker"]
+          envFrom:
+            - secretRef:
+                name: {{ required "existingEnvSecret is required" .Values.existingEnvSecret | quote }}
+          env:
+            - name: BRIDGE_CONFIG
+              value: /run/bridge/config.json
+          volumeMounts:
+            - name: bridge-config
+              mountPath: /run/bridge
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources: {{ .Values.worker.resources | toYaml | nindent 12 }}
+      volumes:
+        - name: bridge-config
+          secret:
+            secretName: {{ required "existingConfigSecret is required" .Values.existingConfigSecret | quote }}
+            items:
+              - key: config.json
+                path: config.json
+        - name: tmp
+          emptyDir: {}

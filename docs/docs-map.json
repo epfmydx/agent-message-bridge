@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "areas": {
+    "messages": {
+      "source": [
+        "bridge/messages.py",
+        "bridge/models.py",
+        "bridge/app.py"
+      ],
+      "documents": [
+        "docs/architecture/overview.md",
+        "docs/api/contract.md"
+      ]
+    },
+    "authentication": {
+      "source": [
+        "bridge/auth.py",
+        "bridge/login_rate.py",
+        "bridge/models_auth.py",
+        "bridge/templates/*.html",
+        "bridge/profiles.py"
+      ],
+      "documents": [
+        "docs/api/authentication.md"
+      ]
+    },
+    "events": {
+      "source": [
+        "bridge/events.py",
+        "bridge/worker.py",
+        "bridge/network.py",
+        "bridge/transport.py",
+        "bridge/schema.py"
+      ],
+      "documents": [
+        "docs/architecture/overview.md",
+        "docs/api/contract.md",
+        "docs/operations/setup.md"
+      ]
+    },
+    "files": {
+      "source": [
+        "bridge/files.py",
+        "bridge/object_store.py"
+      ],
+      "documents": [
+        "docs/api/files.md"
+      ]
+    },
+    "runtime": {
+      "source": [
+        "bridge/config.py",
+        "bridge/__main__.py",
+        "scripts/setup_runtime.py",
+        "config.example.json",
+        ".env.example",
+        "compose.yaml",
+        "admin.env.example"
+      ],
+      "documents": [
+        "docs/operations/setup.md"
+      ]
+    },
+    "publication": {
+      "source": [
+        "Dockerfile",
+        ".dockerignore",
+        ".github/workflows/*.yaml",
+        "charts/agent-message-bridge/**/*",
+        "scripts/release.py",
+        "requirements*.txt",
+        "requirements.lock"
+      ],
+      "documents": [
+        "docs/operations/releases.md"
+      ]
+    },
+    "verification": {
+      "source": [
+        "tests/*.py",
+        "scripts/check_docs.py",
+        "scripts/check_public_content.py",
+        "tests/*.cjs"
+      ],
+      "documents": [
+        "docs/verification.md",
+        "docs/documentation-workflow.md"
+      ]
+    },
+    "browser": {
+      "source": [
+        "bridge/web.py",
+        "bridge/owner_web.py",
+        "bridge/schema.py",
+        "bridge/models.py",
+        "bridge/templates/*.html",
+        "bridge/static/**/*"
+      ],
+      "documents": [
+        "docs/api/browser.md",
+        "docs/ui-assets.md",
+        "docs/architecture/overview.md"
+      ]
+    },
+    "browser_origin": {
+      "source": [
+        "bridge/cloudflare.py",
+        "bridge/config.py",
+        "bridge/app.py",
+        "admin.env.example",
+        "charts/agent-message-bridge/templates/api.yaml",
+        "charts/agent-message-bridge/values.yaml",
+        "compose.yaml"
+      ],
+      "documents": [
+        "docs/operations/cloudflare.md",
+        "docs/operations/setup.md"
+      ]
+    }
+  }
+}

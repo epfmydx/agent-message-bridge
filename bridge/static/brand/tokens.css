@@ -1,0 +1,24 @@
+/* Local neutral presentation tokens. */
+:root {
+  --bridge-content-width: 82rem;
+  --bridge-control-border: #707070;
+  --bridge-focus-offset: 3px;
+  --bridge-focus-width: 2px;
+  --bridge-font: ui-monospace, SFMono-Regular, Consolas, monospace;
+  --bridge-heading-lg: 2.5rem;
+  --bridge-heading-md: 2rem;
+  --bridge-heading-sm: 1.5rem;
+  --bridge-ink: #171717;
+  --bridge-leading-body: 1.6;
+  --bridge-leading-heading: 1.15;
+  --bridge-muted: #555555;
+  --bridge-paper: #ffffff;
+  --bridge-reading-width: 65ch;
+  --bridge-rule: #d9d9df;
+  --bridge-soft: #f4f5f7;
+  --bridge-text-base: 1rem;
+  --bridge-text-lg: 1.125rem;
+  --bridge-text-sm: .875rem;
+  --bridge-text-xl: 1.25rem;
+  --bridge-text-xs: .75rem;
+}

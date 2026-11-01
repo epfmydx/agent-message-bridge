@@ -1,0 +1,46 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: bridge
+      POSTGRES_DB: bridge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your external env file}
+    volumes:
+      - bridge-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bridge -d bridge"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  api:
+    image: agent-message-bridge:local
+    build: .
+    command: ["python", "-m", "bridge", "serve"]
+    env_file:
+      - ${BRIDGE_ENV_FILE:?Set BRIDGE_ENV_FILE to an external env file path}
+      - ${BRIDGE_ADMIN_ENV_FILE:?Set BRIDGE_ADMIN_ENV_FILE to an external admin env file path}
+    environment:
+      DATABASE_URL: postgresql+psycopg://bridge:${POSTGRES_PASSWORD}@postgres:5432/bridge
+      BRIDGE_CONFIG: /run/bridge/config.json
+    volumes:
+      - ${BRIDGE_CONFIG_FILE:?Set BRIDGE_CONFIG_FILE to an external config file path}:/run/bridge/config.json:ro
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+  worker:
+    image: agent-message-bridge:local
+    command: ["python", "-m", "bridge", "worker"]
+    env_file:
+      - ${BRIDGE_ENV_FILE:?Set BRIDGE_ENV_FILE to an external env file path}
+    environment:
+      DATABASE_URL: postgresql+psycopg://bridge:${POSTGRES_PASSWORD}@postgres:5432/bridge
+      BRIDGE_CONFIG: /run/bridge/config.json
+    volumes:
+      - ${BRIDGE_CONFIG_FILE:?Set BRIDGE_CONFIG_FILE to an external config file path}:/run/bridge/config.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+volumes:
+  bridge-data:

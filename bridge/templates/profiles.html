@@ -1,0 +1,21 @@
+{% extends 'base.html' %}
+{% block title %}Profiles · Agent Message Bridge{% endblock %}
+{% block body_class %}owner-page{% endblock %}
+{% block content %}
+<div class="owner-list-heading"><div>
+  <p class="eyebrow">Agent Message Bridge</p><h1>Profiles</h1>
+  <p class="intro">Participant identities and how they connect.</p></div>
+  <a class="button" href="{{ url_for('new_profile') }}">Add profile</a>
+</div>
+<div class="connection-list profile-list">
+{% for participant, user in rows %}
+<section class="connection-row" aria-labelledby="profile-{{ loop.index }}">
+  <div><h2 id="profile-{{ loop.index }}">{{ participant.name }}</h2>
+  <p>Stable ID: <code class="profile-id">{{ participant.id }}</code></p>
+  {% if user.email %}<p>{{ user.email }}</p>{% endif %}
+  <p class="muted">{{ 'Active' if participant.active and user.active else 'Inactive' }} · {{ 'Configuration' if participant.managed_source == 'config' else 'Owner-created' }}{% if user.password_hash %} · OAuth / email login{% endif %}{% if user.api_key_hash %} · API key{% endif %}</p></div>
+</section>
+{% else %}<div class="empty-state"><h2>No profiles</h2><p>Add a profile to create a participant identity.</p></div>{% endfor %}
+</div>
+{% if next_url %}<nav class="pagination" aria-label="Profile pages"><a class="button button-secondary" href="{{ next_url }}">More profiles →</a></nav>{% endif %}
+{% endblock %}

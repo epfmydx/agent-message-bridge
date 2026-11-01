@@ -1,0 +1,56 @@
+name: Validate source release
+
+"on":
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.event.deleted != true
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: bridge_ci
+          POSTGRES_USER: bridge_ci
+          POSTGRES_PASSWORD: disposable-ci-only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U bridge_ci -d bridge_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: '0.12.13'
+          python-version: '3.15'
+          enable-cache: true
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+        with:
+          version: v4.3.0
+      - name: Install validation dependencies
+        run: |
+          uv venv --python 3.15 .venv-ci
+          uv pip install --python .venv-ci/bin/python -r requirements.lock -r requirements-dev.txt
+      - name: Validate source release version
+        env:
+          RELEASE_NAME: ${{ github.ref_name }}
+        run: .venv-ci/bin/python scripts/release.py plan --tag "$RELEASE_NAME"
+      - name: Check source candidate and synthetic PostgreSQL acceptance
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://bridge_ci:disposable-ci-only@127.0.0.1:5432/bridge_ci
+        run: |
+          .venv-ci/bin/python scripts/check_public_content.py
+          .venv-ci/bin/python scripts/check_docs.py
+          .venv-ci/bin/python -m pytest -q
+          helm lint charts/agent-message-bridge

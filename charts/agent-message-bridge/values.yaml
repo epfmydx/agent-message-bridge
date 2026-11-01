@@ -1,0 +1,21 @@
+image:
+  repository: agent-message-bridge/app
+  tag: dev
+  digest: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+existingEnvSecret: agent-message-bridge-env
+existingConfigSecret: agent-message-bridge-config
+adminOrigin:
+  secretName: agent-message-bridge-admin-origin
+  secretKey: CLOUDFLARE_ORIGIN_SECRET
+  trustedProxyCidrs: []
+api:
+  replicas: 1
+  resources: {}
+worker:
+  replicas: 1
+  resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

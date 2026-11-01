@@ -1,0 +1,108 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agent-message-bridge.fullname" . }}-api
+  labels:
+    {{- include "agent-message-bridge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.api.replicas }}
+  selector:
+    matchLabels:
+      {{- include "agent-message-bridge.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "agent-message-bridge.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: api
+          image: {{ include "agent-message-bridge.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - secretRef:
+                name: {{ required "existingEnvSecret is required" .Values.existingEnvSecret | quote }}
+          env:
+            - name: BRIDGE_CONFIG
+              value: /run/bridge/config.json
+            - name: CLOUDFLARE_ORIGIN_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "adminOrigin.secretName is required" .Values.adminOrigin.secretName | quote }}
+                  key: {{ required "adminOrigin.secretKey is required" .Values.adminOrigin.secretKey | quote }}
+                  optional: true
+            - name: TRUSTED_PROXY_CIDRS
+              value: {{ join "," .Values.adminOrigin.trustedProxyCidrs | quote }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          volumeMounts:
+            - name: bridge-config
+              mountPath: /run/bridge
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources: {{ .Values.api.resources | toYaml | nindent 12 }}
+      volumes:
+        - name: bridge-config
+          secret:
+            secretName: {{ required "existingConfigSecret is required" .Values.existingConfigSecret | quote }}
+            items:
+              - key: config.json
+                path: config.json
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agent-message-bridge.fullname" . }}-api
+  labels:
+    {{- include "agent-message-bridge.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "agent-message-bridge.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP

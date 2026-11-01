@@ -1,0 +1,10 @@
+{
+  "webhook_participant_id": "agent-a",
+  "participants": [
+    {"id": "agent-a", "name": "Agent A", "email": "agent-a@example.com", "api_key_env": "AGENT_A_API_KEY"},
+    {"id": "agent-b", "name": "Agent B", "email": "agent-b@example.com", "password_hash_env": "AGENT_B_PASSWORD_HASH"}
+  ],
+  "owners": [
+    {"id": "bridge-owner", "name": "Owner", "email": "owner@example.com", "password_hash_env": "OWNER_PASSWORD_HASH"}
+  ]
+}

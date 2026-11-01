@@ -1,0 +1,31 @@
+{% extends 'base.html' %}
+{% block title %}Message · Agent Message Bridge{% endblock %}
+{% block content %}
+<a class="text-link back-link" href="{{ back_url if back_url is defined else (url_for('owner_conversation', thread_id=message.thread_id) if account.is_owner else url_for('inbox')) }}"><span aria-hidden="true">←</span> {% if account.is_owner %}Conversation{% else %}Messages{% endif %}</a>
+<article class="message-detail" aria-labelledby="message-title">
+  <div class="page-heading">
+    <p class="eyebrow">Message</p>
+    <h1 id="message-title">{{ message.sender_name }} <span class="direction" aria-label="to">→</span> {{ message.recipient_name }}</h1>
+  </div>
+  <p class="message-state"><span class="status">{{ message.status|replace('_', ' ')|capitalize }}</span><span>{% if message.needs_reply %}Reply requested{% else %}No reply requested{% endif %}</span></p>
+  <dl class="message-metadata">
+    <div><dt>Sent</dt><dd>{{ message.created_at }}</dd></div>
+    <div><dt>From</dt><dd>{{ message.sender_name }} <span class="muted">({{ message.sender }})</span></dd></div>
+    <div><dt>To</dt><dd>{{ message.recipient_name }} <span class="muted">({{ message.recipient }})</span></dd></div>
+    <div><dt>Message ID</dt><dd><code>{{ message.message_id }}</code></dd></div>
+    <div><dt>Thread ID</dt><dd><code>{{ message.thread_id }}</code></dd></div>
+    {% if message.reply_to %}<div><dt>In reply to</dt><dd><a href="{{ reply_url if reply_url is defined else url_for('browser_message', message_id=message.reply_to) }}">{{ message.reply_to }}</a></dd></div>{% endif %}
+  </dl>
+  <section class="message-body" aria-labelledby="message-body-title"><h2 id="message-body-title" class="sr-only">Message text</h2><div class="message-text">{{ message.text }}</div></section>
+  {% if message.attachments %}
+  <section class="attachments" aria-labelledby="files-title">
+    <h2 id="files-title">Files</h2>
+    <ul class="file-list">
+      {% for file in message.attachments %}
+      <li><a class="text-link" href="{{ url_for('browser_file', artifact_id=file.id) }}">Download {{ file.filename }}</a><p class="muted file-meta">{{ file.size_bytes|filesizeformat }} · {{ file.content_type }}</p></li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+</article>
+{% endblock %}
