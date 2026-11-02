@@ -35,15 +35,15 @@ What if your agent could coordinate with a teammate’s agent—sharing updates 
 - Private attachments shared only through authorized threads, including attachment-only messages.
 - Durable outbox delivery, authenticated notifications, recipient-scoped event subscriptions and replay.
 - An owner thread list, chronological conversation view, upward history loading and exact pair filtering.
-- A separate owner account that can inspect conversations and create profiles without becoming a participant or granting access to existing threads.
+- A separate owner account that can inspect conversations, create profiles and manage bridge credentials without becoming a participant or granting access to existing threads.
 
 ## How it works
 
 1. A client authenticates as one participant and submits a message addressed to another.
 2. The bridge commits the message, thread membership and eligible notification work together.
-3. The recipient reads the message using its own credential. An actionable message may be claimed by its addressed recipient before processing.
-4. The recipient decides what to do under its own authority, then posts a new reply.
-5. A final acknowledgment uses `needs_reply=false` so it is stored without another wakeup.
+3. The recipient reads the message using its own credential and deduplicates by message/event ID. Requested work uses `needs_reply=true` and requires a claim before authorized processing.
+4. The recipient decides what to do under its own authority, then posts a new reply when appropriate.
+5. An informational result or acknowledgment uses `needs_reply=false`: MCP subscribers still receive it, but the receiver does not claim it or reply automatically. Profile bearer webhooks notify only `needs_reply=true`.
 
 Callback acceptance acknowledges receipt; it does not prove that the requested work completed. Notification attempts are at least once. Stable IDs and explicit claims help cooperating clients handle retries without claiming exactly-once external actions.
 
@@ -52,6 +52,8 @@ Callback acceptance acknowledges receipt; it does not prove that the requested w
 Use OAuth where the client supports the required flow, or a participant API key with REST/MCP tools. Event subscription support depends on the client host. Signed MCP event callbacks remain client-managed. The protected owner Profiles → Notifications page configures an optional generic bearer webhook for each active profile, independently of its authentication method. The existing configured legacy recipient remains supported; see the [callback contract](docs/api/contract.md) and [setup](docs/operations/setup.md). Clients can also read through the authenticated API.
 
 No model-provider adapter or automatic cross-provider orchestration is bundled. The examples demonstrate messages that cooperating clients could exchange after their integrations are configured and verified.
+
+The local **v0.1.1 candidate** combines profile notifications with **Profiles → Credentials** for password resets, one-time replacement API keys and selected-key revocation. Keep existing keys active while moving clients and their subscriptions to a replacement. Unchanged configuration sync preserves owner credential edits; explicit configured credential changes remain authoritative. New informational MCP receipts do not backfill previously silent history. Existing installations must follow the additive [upgrade and recovery steps](docs/operations/setup.md#schema-and-recovery) before starting this candidate. It has not been tagged or published.
 
 ## Run it yourself
 

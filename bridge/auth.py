@@ -16,7 +16,7 @@ from sqlalchemy import select, update
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .models import Participant, Subscription, now, uid
-from .models_auth import BrowserOwner, Client, Code, Family, Token, User
+from .models_auth import APIKey, BrowserOwner, Client, Code, Family, Token, User
 
 SCOPE = "bridge:messages"
 AUTH_METHODS = ["client_secret_basic", "client_secret_post", "none"]
@@ -26,8 +26,8 @@ def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def service_client(owner_id):
-    return "service:"+owner_id
+def service_client(owner_id, key_id=None):
+    return "service:"+owner_id + (":"+key_id if key_id else "")
 
 
 def service_family(key_hash):
@@ -45,33 +45,55 @@ def deactivate_subscriptions(db, **filters):
 def bootstrap_users(db, settings_users):
     """Synchronize configured credentials; caller owns the transaction.
 
-    Password rotation ends OAuth connections. API-key rotation invalidates its
-    service connection and durable subscriptions, including on later restarts.
+    Unchanged configuration preserves owner-managed credentials. Explicit
+    changes supersede UI changes for that credential type, and profile removal
+    revokes every credential and subscription. The caller owns the transaction.
     """
+    from .credentials import initialize_baseline, revoke_password_connections, revoke_service_keys
+    from .profiles import lock_profile_changes
+    lock_profile_changes(db)
     configured = {item["id"] for item in settings_users}
     for user in db.scalars(select(User)):
         if user.managed_source == "config" and user.id not in configured:
+            initialize_baseline(user)
+            if user.active:
+                user.credential_generation += 1
             user.active = False
-            user.api_key_hash = None
-            for family in db.scalars(select(Family).where(Family.owner_id == user.id)):
-                revoke_family(db, family.id)
+            user.password_hash = ""
+            revoke_service_keys(db, user)
+            revoke_password_connections(db, user)
             deactivate_subscriptions(db, owner_id=user.id)
     for item in settings_users:
-        user = db.get(User, item["id"])
+        user = db.scalar(select(User).where(User.id == item["id"]).with_for_update(key_share=True)
+                         .execution_options(populate_existing=True))
+        password_hash = item["password_hash"]
+        api_key_hash = item.get("api_key_hash") or None
         if user is None:
-            user = User(id=item["id"])
+            user = User(id=item["id"], password_hash=password_hash, api_key_hash=api_key_hash,
+                        credential_generation=1, credential_baseline_set=True,
+                        configured_password_hash=password_hash, configured_api_key_hash=api_key_hash,
+                        password_source="config", api_key_source="config")
             db.add(user)
         else:
             if user.managed_source != "config":
                 raise ValueError("Configured identity conflicts with a database-managed profile")
-            if user.password_hash != item["password_hash"]:
-                for family in db.scalars(select(Family).where(Family.owner_id == user.id)):
-                    revoke_family(db, family.id)
-            if user.api_key_hash != item.get("api_key_hash"):
-                deactivate_subscriptions(db, owner_id=user.id, client_id=service_client(user.id))
+            initialize_baseline(user)
+            password_changed = not user.active or user.configured_password_hash != password_hash
+            key_changed = not user.active or user.configured_api_key_hash != api_key_hash
+            if password_changed:
+                revoke_password_connections(db, user)
+                user.password_hash, user.password_source = password_hash, "config"
+                user.configured_password_hash = password_hash
+            if key_changed:
+                revoke_service_keys(db, user)
+                user.api_key_hash, user.api_key_source = api_key_hash, "config"
+                user.configured_api_key_hash = api_key_hash
+            if password_changed or key_changed:
+                user.credential_generation += 1
+        if api_key_hash and db.scalar(select(APIKey.id).where(APIKey.key_hash == api_key_hash,
+                                                               APIKey.owner_id != user.id)):
+            raise ValueError("Configured API credential conflicts with an existing profile")
         user.email = item["email"].casefold()
-        user.password_hash = item["password_hash"]
-        user.api_key_hash = item.get("api_key_hash") or None
         user.active = True
 
 
@@ -146,6 +168,11 @@ def family_active(db, owner_id, client_id, family):
         return False
     if client_id == service_client(owner_id):
         return bool(user.api_key_hash and hmac.compare_digest(family, service_family(user.api_key_hash)))
+    prefix = service_client(owner_id) + ":"
+    if client_id.startswith(prefix):
+        key = db.get(APIKey, client_id[len(prefix):], populate_existing=True)
+        return bool(key and key.owner_id == owner_id and key.active
+                    and hmac.compare_digest(family, service_family(key.key_hash)))
     client = active_client(db, client_id)
     item = db.get(Family, family, populate_existing=True)
     return bool(client and item and item.active and item.owner_id == owner_id and item.client_id == client_id)
@@ -165,7 +192,7 @@ def revoke_family(db, family):
                .values(active=False, generation=Subscription.generation+1))
 
 
-def bearer(db):
+def bearer(db, *, lock_service=False):
     """Resolve sender identity from stored credentials, never from request data."""
     header = request.headers.get("Authorization", "")
     if not header.startswith("Bearer ") or not header[7:]:
@@ -181,12 +208,27 @@ def bearer(db):
             abort(401)
         return item
     user = db.scalar(select(User).where(User.api_key_hash == value_hash))
-    if not user or not authorized_user(db, user.id):
+    key = db.scalar(select(APIKey).where(APIKey.key_hash == value_hash, APIKey.active.is_(True)))
+    owner_id = user.id if user else key.owner_id if key else None
+    if not owner_id:
+        abort(401)
+    # Only subscription revalidation needs to hold this authority through its
+    # mutation. Ordinary operations own their participant lock order; taking a
+    # sender lock here would invert send_message's sorted sender/recipient order.
+    if lock_service:
+        db.scalar(select(Participant).where(Participant.id == owner_id).with_for_update()
+                  .execution_options(populate_existing=True))
+    user = authorized_user(db, owner_id)
+    valid = user and user.api_key_hash == value_hash
+    if key:
+        key = db.get(APIKey, key.id, populate_existing=True)
+        valid = valid or bool(key and key.active and key.owner_id == owner_id)
+    if not user or not valid:
         abort(401)
     # Token-shaped context; no service secret or synthetic DB token is created.
     from types import SimpleNamespace
-    return SimpleNamespace(owner_id=user.id, client_id=service_client(user.id),
-                           family=service_family(user.api_key_hash), scope=SCOPE)
+    return SimpleNamespace(owner_id=user.id, client_id=service_client(user.id, key.id if key else None),
+                           family=service_family(value_hash), scope=SCOPE)
 
 
 def validate_redirect_uri(uri):
@@ -237,6 +279,15 @@ class CodeGrant(AuthorizationCodeGrant):
     TOKEN_ENDPOINT_AUTH_METHODS = AUTH_METHODS
 
     def save_authorization_code(self, code, req):
+        # Consent may have passed browser_user before a concurrent password
+        # reset. Serialize issuance with reset, then recheck that exact cookie
+        # before adding authority the reset's family scan could otherwise miss.
+        owner_id = req.user.id
+        g.db.scalar(select(Participant).where(Participant.id == owner_id).with_for_update()
+                     .execution_options(populate_existing=True))
+        user = browser_user(g.db)
+        if not user or user.id != owner_id:
+            abort(401)
         family = uid()
         g.db.add(Family(id=family, owner_id=req.user.id, client_id=req.client.client_id))
         g.db.flush()
@@ -402,14 +453,17 @@ def install_auth(app):
                 candidate = actual_hash if actual_hash and method == actual_method else dummy
                 matched = check_password_hash(candidate, request.form.get("password", ""))
                 valid = valid or (matched and bool(actual_hash) and method == actual_method)
-            if valid and (owner or authorized_user(g.db, user.id)):
+            if (valid and (owner or authorized_user(g.db, user.id))
+                    and hmac.compare_digest(user.password_hash, actual_hash)):
                 # The return target is always constructed by our authorize route.
                 target = "/" if owner else session.get("authorize_next", "/")
                 if not target.startswith("/oauth/authorize?"):
                     target = "/"
                 session.clear()
                 session["owner"] = user.id
-                session["credential"] = digest(user.password_hash)
+                # Bind only the immutable hash actually checked above. A reset
+                # after the comparison yields an old cookie rejected on use.
+                session["credential"] = digest(actual_hash)
                 session["account_kind"] = "owner" if owner else "participant"
                 session.permanent = True
                 return redirect(target)

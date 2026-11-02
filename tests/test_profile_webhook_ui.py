@@ -250,6 +250,17 @@ def test_unencodable_replacement_token_keeps_current_settings_and_secret_fields_
     assert_blank_fields(response)
 
 
+def test_latin1_replacement_token_remains_supported(profile_app):
+    from bridge.profile_webhooks import callback
+    client = sign_in(profile_app)
+    assert configure(client).status_code == 303
+    token = "synthetic-caf\u00e9-token"
+    data = notification_form(client, webhook_enabled="1", webhook_token=token)
+    assert post(client, PATH, data=data).status_code == 303
+    with profile_app.extensions["sessions"]() as db:
+        assert callback(profile_app.config, db.get(Participant, "agent-b"))[1] == token
+
+
 def test_api_key_once_with_webhook_and_independent_oauth_creation(profile_app):
     client = sign_in(profile_app)
     response = create(client, webhook_enabled="1", webhook_url=DESTINATION, webhook_token=OUTBOUND_TOKEN)

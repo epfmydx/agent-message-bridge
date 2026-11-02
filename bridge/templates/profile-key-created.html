@@ -1,0 +1,22 @@
+{% extends 'base.html' %}
+{% block title %}API key created · Agent Message Bridge{% endblock %}
+{% block body_class %}owner-page{% endblock %}
+{% block content %}
+<section class="profile-layout credential-layout">
+<div class="page-heading"><p class="eyebrow">Owner · {{ participant.name }}</p><h1>Save your API key</h1>
+<p class="intro">This key is available only on this page. Copy it before leaving.</p></div>
+<div class="credential-section credential-reveal" data-key-reveal>
+  <p class="credential-notice" role="status">API key created. Existing keys remain active.</p>
+  <div class="field"><label for="created-api-key">New API key</label>
+  <input id="created-api-key" class="credential-secret" type="password" readonly value="{{ api_key }}" autocomplete="off" spellcheck="false" autocapitalize="off" aria-describedby="created-key-help">
+  <p id="created-key-help" class="muted">Use this as the participant’s bearer credential. It cannot be retrieved again.</p></div>
+  <div class="actions credential-secret-actions"><button class="button button-secondary" type="button" data-toggle-key aria-controls="created-api-key" aria-pressed="false" hidden>Show key</button><button class="button button-secondary" type="button" data-copy-key hidden>Copy key</button></div>
+  <p class="credential-copy-status muted" role="status" aria-live="polite" data-copy-status></p>
+  <p class="credential-key-id">Key ID: <code>{{ key_id }}</code></p>
+  <p class="credential-helper muted">Update the client and its event subscriptions before revoking the old key. If this page is lost, revoke the unused key by its ID and create another.</p>
+  <noscript><p class="credential-helper muted">Show and Copy require JavaScript. If you cannot save this key, return to Credentials and revoke it by its ID before creating another.</p></noscript>
+</div>
+<div class="actions credential-bottom-actions"><a class="button" href="{{ url_for('profile_credentials', profile_id=participant.id) }}">Back to credentials</a><a class="button button-secondary" href="{{ url_for('profiles') }}">Profiles</a></div>
+</section>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='profile-credentials.js') }}" defer></script>{% endblock %}

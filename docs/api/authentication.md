@@ -100,15 +100,58 @@ Send it as `Authorization: Bearer <service_key>`. The bridge looks up the key's
 owner in its database and checks the active participant. `owner_id`, `sender_id`
 or any other supplied identity never overrides that lookup.
 
-Service requests use `client_id=service:<participant_id>` and a family derived
-from the currently stored key hash. Event delivery checks that family against
-the current database credential. After rotating or removing the configured key, run `sync-config` (or `init-db`
+The original service key uses `client_id=service:<participant_id>`; additional
+owner-created keys use `service:<participant_id>:<key_id>`. Each key has its own
+hash-derived family. Event delivery checks that exact key is still active, so
+two keys can register independent subscriptions at the same callback during a
+handover. After rotating or removing the configured key, run `sync-config` (or `init-db`
 for initial setup) to synchronize the stored credential and deactivate its old
 subscriptions, then restart consumers with the updated credential. A normal
 restart alone does not synchronize credentials or revoke the stored key. Register
 subscriptions again using the new credential. Keys have no arbitrary
 expiry or usage quota. Duplicate keys across participants are rejected by the
-unique database constraint because one credential must identify one sender.
+database constraints and cross-store checks because one credential must identify one sender.
+
+## Owner credential management
+
+**Profiles → Credentials** manages a participant's bridge password and API keys.
+This is owner-only administration, separate from the owner's own login,
+external provider credentials and outbound webhook tokens. It does not grant
+OAuth consent, change thread membership or provide participant connection controls.
+An existing profile email is required to set/reset its password; email and stable
+identity are not edited here. Password reset ends existing participant browser
+sessions and OAuth connection families, including their subscriptions, while
+leaving service keys and profile webhooks unchanged.
+An already authenticated/in-flight operation can finish; resetting credentials
+does not undo work already accepted by a client.
+
+Create a replacement API key, save its one-time value and update the client before
+explicitly revoking the old key. Both keys work during the handover. Register or
+reconnect the client's event subscription with the new key before retiring the old
+one. Parallel subscriptions are independent and can both notify the same receiver;
+the receiver must retain its normal event/message deduplication. Revoking a key
+immediately denies later requests and disables only its subscriptions; other keys
+and OAuth connections remain active. A request already authorized/in flight can
+finish. API keys have no new expiry, quota or automatic retirement.
+
+Only key hashes and nonsecret key IDs/timestamps are stored. A generated value is
+rendered once, after commit, masked until revealed, with user-triggered copy.
+Existing values cannot be retrieved. Form receipts store only a digest of the
+signed operation token; stale or repeated submissions return 409 and cannot issue
+another key. If a successful response is lost, use the listed key ID to revoke the
+unavailable key and create another. Raw keys/passwords are never put into links,
+browser storage or session cookies. All pages retain no-store/no-referrer headers.
+
+Credential provenance is separate from profile identity provenance. For configured
+profiles, initialization snapshots the last applied configured password/key
+hashes. An unchanged configuration sync preserves UI resets, added keys and
+revocations. An explicit configuration password change supersedes the UI password
+and ends its sessions/OAuth families; an explicit configuration API-key change or
+removal revokes all service keys/subscriptions for that profile and applies the new
+configured key. Removing the profile disables all credentials/subscriptions. A
+subsequent explicit re-add applies configured credentials, without reviving old
+added keys. Merely restarting a process does not synchronize configuration.
+See [upgrade and recovery](../operations/setup.md#owner-credential-schema-upgrade).
 
 ## Disconnect and credential changes
 

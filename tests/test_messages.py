@@ -70,7 +70,7 @@ def test_message_requires_explicit_needs_reply_and_valid_status(bridge_app):
     assert send(client, app, "agent-a", payload("good-needs-reply-false", needs_reply=False)).status_code == 200
 
 
-def test_closing_message_is_stored_without_delivery_or_later_event_backlog(bridge_app):
+def test_informational_message_is_stored_and_caught_up_by_mcp(bridge_app):
     app, client = bridge_app, bridge_app.test_client()
     closing = send(client, app, "agent-a", payload("closing-message", needs_reply=False)).get_json()
     with app.extensions["sessions"]() as db:
@@ -80,7 +80,8 @@ def test_closing_message_is_stored_without_delivery_or_later_event_backlog(bridg
             "name": "bridge.message.received", "arguments": {}, "delivery": {"mode": "webhook", "url": "https://agent-b.example.com/events", "secret": "whsec_" + __import__("base64").b64encode(b"x" * 32).decode()}}})
     assert "result" in subscription.get_json()
     with app.extensions["sessions"]() as db:
-        assert db.scalar(select(func.count(Delivery.id)).where(Delivery.message_id == closing["message_id"])) == 0
+        queued = list(db.scalars(select(Delivery).where(Delivery.message_id == closing["message_id"])))
+        assert len(queued) == 1 and queued[0].kind == "mcp"
         assert db.scalar(select(func.count(Message.id)).where(Message.id == closing["message_id"])) == 1
 
 
@@ -191,7 +192,8 @@ def test_mcp_tools_call_non_string_name_returns_invalid_arguments(bridge_app):
 
 
 @pytest.mark.skipif(not os.environ.get("TEST_DATABASE_URL"), reason="Concurrent PostgreSQL locking requires TEST_DATABASE_URL")
-def test_postgres_concurrent_duplicate_and_distinct_message_sequence(bridge_app):
+@pytest.mark.parametrize("needs_reply", [False, True])
+def test_postgres_concurrent_duplicate_and_distinct_message_sequence(bridge_app, needs_reply):
     """Exercise real row locking: one ID stays unique and independent IDs keep sequence continuity."""
     from bridge.errors import Conflict
     from bridge.messages import send_message
@@ -203,7 +205,7 @@ def test_postgres_concurrent_duplicate_and_distinct_message_sequence(bridge_app)
             ready.wait()
             return send_message(db, app.config, "agent-a", payload(
                 "concurrent-same-id" if index < 2 else "concurrent-" + str(index),
-                thread_id=starter["thread_id"]))
+                thread_id=starter["thread_id"], needs_reply=needs_reply))
     with ThreadPoolExecutor(max_workers=6) as pool:
         futures = [pool.submit(submit, index) for index in range(6)]
         results = []
@@ -223,3 +225,6 @@ def test_postgres_concurrent_duplicate_and_distinct_message_sequence(bridge_app)
         sequences = list(db.scalars(select(Message.sequence).where(Message.thread_id == row.id).order_by(Message.sequence)))
         assert sequences == list(range(1, row.sequence + 1))
         assert sequences == list(range(1, len(set(r["message_id"] for r in results)) + 2))
+        inbox = list(db.scalars(select(Message.recipient_sequence).where(Message.thread_id == row.id)
+                               .order_by(Message.recipient_sequence)))
+        assert inbox == sequences

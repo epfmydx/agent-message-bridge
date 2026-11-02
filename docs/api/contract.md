@@ -19,7 +19,7 @@ All `/api/*` and `/mcp` requests require `Authorization: Bearer <credential>`. A
 
 The response contains `message_id`, generated `thread_id`, authenticated `sender`, recipient, text, status, needs_reply, attachment IDs, sequence, timestamp and `duplicate`. Save that response. Retry the **same input with the same message_id** after an uncertain submission. Do not add the generated thread ID to a retry of the original thread-creating request; it is part of the idempotent input.
 
-To respond, create a new message ID, use the returned `thread_id`, address the other participant, and set `reply_to` to a message in that thread. Status is one of `received`, `working`, `completed`, `needs_input`. Both status and needs_reply are explicit; no inference from text. A completed result that the other participant should inspect uses needs_reply=true. A closing acknowledgment uses false and is stored without any wakeup.
+To respond, create a new message ID, use the returned `thread_id`, address the other participant, and set `reply_to` to a message in that thread. Status is one of `received`, `working`, `completed`, `needs_input`. Both status and needs_reply are explicit; no inference from text. Use `needs_reply=true` to request authorized work or a response. New messages with either flag notify recipient MCP subscribers. With false, the receiver reads the message as information without claiming, delegating work or replying automatically. Profile bearer webhooks notify only `needs_reply=true`.
 
 | HTTP | MCP tool | Purpose |
 | --- | --- | --- |
@@ -64,7 +64,9 @@ A profile's generic bearer webhook receives an HTTP POST with `Content-Type: app
 }
 ```
 
-The receiving routine reads `data.message_id` through the bridge API/MCP, then claims any work before delegation. The bearer webhook requires exactly HTTP 200 for accepted receipt. HTTP 201 and 204 are terminal rejections, as are other nontransient HTTP responses. Network failures, timeouts, HTTP 408, 425, 429 and 5xx retry; a permanently invalid destination is terminal. Callbacks retain the existing public HTTPS/DNS/TLS checks and reject redirects. MCP 2xx means event receipt; a client host may process asynchronously. Neither means that a report, deployment or other work completed.
+The receiving routine reads `data.message_id` through the bridge API/MCP and deduplicates the stored message. With true, claim before delegating authorized work; with false, read without claiming, delegating or replying automatically. The bearer webhook requires exactly HTTP 200 for accepted receipt. HTTP 201 and 204 are terminal rejections, as are other nontransient HTTP responses. Network failures, timeouts, HTTP 408, 425, 429 and 5xx retry; a permanently invalid destination is terminal. Callbacks retain the existing public HTTPS/DNS/TLS checks and reject redirects. MCP 2xx means event receipt; a client host may process asynchronously. Neither means that a report, deployment or other work completed.
+
+MCP catch-up includes sequenced recipient messages with either flag. Historical silent messages retain NULL notification sequences and are not backfilled by upgrade, first connection, refresh or cursor replay. Existing actionable backlog, event identities and signed cursor meanings are retained. See [upgrade behavior](../operations/setup.md#informational-mcp-notifications).
 
 Owner-managed webhooks apply only to new `needs_reply=true` messages; enabling or changing settings does not backfill history. Delivery rows retain `kind=webhook` and destination `webhook:<participant_id>`. A generation change fences unsent older deliveries and prevents late results from accepting them; it cannot recall a request already in flight. Explicit disable suppresses legacy fallback. Signed MCP subscriptions and their replay remain client-managed and independent of these settings.
 

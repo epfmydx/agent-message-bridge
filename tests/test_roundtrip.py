@@ -58,7 +58,12 @@ def test_two_agent_file_message_roundtrip_and_closing_message(bridge_app):
 
     closed = client.post("/api/messages", headers=agent_a, json={"message_id": "closed", "thread_id": request["thread_id"], "reply_to": "agent_b-result", "recipient": "agent-b", "text": "Thanks, all done", "status": "completed", "needs_reply": False}).get_json()
     assert closed["needs_reply"] is False
+    assert deliver_one(app.extensions["sessions"], app.config, post=post)
+    assert delivered[-1][1]["data"]["message_id"] == "closed"
+    assert delivered[-1][1]["data"]["needs_reply"] is False
+    assert "Authorization" not in delivered[-1][2]
+    assert client.post("/api/messages/closed/claim", headers=agent_b, json={"claim_id":"synthetic-no-closing-claim"}).status_code == 400
     assert deliver_one(app.extensions["sessions"], app.config, post=post) is False
     with app.extensions["sessions"]() as db:
-        assert db.scalar(select(func.count()).select_from(Delivery)) == 2
+        assert db.scalar(select(func.count()).select_from(Delivery)) == 3
         assert db.scalar(select(func.count()).select_from(Message)) == 3

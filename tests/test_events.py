@@ -55,7 +55,7 @@ def test_server_discovery_and_mcp_tool_event_schemas(bridge_app):
         "message_id", "thread_id", "sender", "recipient", "status", "needs_reply"}
 
 
-def test_subscription_catches_up_own_inbox_and_never_emits_closing_message(bridge_app):
+def test_subscription_catches_up_own_actionable_and_informational_inbox(bridge_app):
     app, client = bridge_app, bridge_app.test_client()
     assert send_to(client, app, "agent-b", "backlog-actionable").status_code == 200
     assert send_to(client, app, "intruder", "other-inbox-actionable").status_code == 200
@@ -64,9 +64,8 @@ def test_subscription_catches_up_own_inbox_and_never_emits_closing_message(bridg
     assert "result" in response, response
     with app.extensions["sessions"]() as db:
         deliveries = list(db.scalars(select(Delivery).where(Delivery.kind == "mcp").order_by(Delivery.id)))
-        assert len(deliveries) == 1
-        assert deliveries[0].message_id == "backlog-actionable"
-        assert deliveries[0].subscription_id == response["result"]["id"]
+        assert {item.message_id for item in deliveries} == {"backlog-actionable", "backlog-closing"}
+        assert all(item.subscription_id == response["result"]["id"] for item in deliveries)
 
 
 def test_subscription_verification_runs_without_transaction_and_rechecks_auth(bridge_app):

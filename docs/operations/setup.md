@@ -112,7 +112,7 @@ Before opening `/login`, complete the [browser origin configuration](cloudflare.
 
 After the trusted HTTPS path works, sign in as the separate owner and open Profiles → Add profile. Choose OAuth/email login (email/password required) or API key only (email optional). A generated key is displayed once and stored only as a hash. The owner receives no participant/API identity, cannot consent for a participant and does not add profiles to existing threads. Any authenticated participant can create a new private pair thread. Optional notification controls are independent of the authentication method; the [browser guide](../api/browser.md#owner-profile-notifications) describes enable, replacement and disable. Saved URLs are private and tokens are Fernet-encrypted with the existing `ENCRYPTION_KEY`; retain the current key. Only new actionable messages notify, with no history backfill.
 
-Database-managed profiles survive `sync-config`; configured removal/password or key rotation retains revocation semantics. Configuration cannot take over a database-managed profile. Keep stable IDs separate from display names. Client hosts retain their own authority; do not seed fictional conversations into a live deployment merely to read them.
+Database-managed profiles survive `sync-config`; configured removal/password or key rotation retains revocation semantics. Profiles → Credentials manages existing bridge passwords and API keys separately from notification tokens. Password resets end participant browser/OAuth sessions; replacement API keys support handover before selected-key revocation. Unchanged config sync preserves owner credential edits, while an explicit configured API-key change/removal revokes all profile service keys and their subscriptions. Configuration cannot take over a database-managed profile. Keep stable IDs separate from display names. Client hosts retain their own authority; do not seed fictional conversations into a live deployment merely to read them.
 
 For local synthetic guard and browser-contract checks, without configuring a real edge:
 
@@ -128,17 +128,48 @@ These tests supply synthetic trusted-peer/header values and do not establish a p
 
 For profile webhooks, run the new runtime's `init-db` successfully before upgrading **all API and worker processes**. It additively introduces nullable `participants.webhook_enabled`, `webhook_url` and `webhook_token`, non-null `participants.webhook_generation` with default 1, nullable `deliveries.webhook_generation`, and the active partial `ix_deliveries_due` index. Existing messages, memberships and delivery data are retained. Keep current credentials and encryption/session keys; no key rotation or destructive schema rollback is required. Wait until every API and worker process uses the upgraded runtime before enabling or changing profile webhooks; older API writers omit the generation snapshot and older workers ignore the override.
 
-An older runtime can serve the retained schema only while the inherited legacy configuration is unchanged and no profile overrides or new profile callbacks have been used. Its worker ignores profile overrides and explicit disable, so after notification changes prefer recovery with a compatible newer runtime. Retain the expanded schema and data instead of dropping columns or restoring an older database snapshot. A request already in flight during a settings change may still arrive; generation fencing prevents its late response from accepting stale work, not the external receipt itself.
+An older runtime can serve the retained schema only while the inherited legacy configuration is unchanged and no profile overrides, new callbacks or credential controls have been used. Its worker ignores profile overrides and explicit disable, and its authentication code does not understand additional keys. Retain the expanded schema and data for compatible recovery. A request already in flight during a settings change may still arrive; generation fencing prevents its late response from accepting stale work, not the external receipt itself.
 
 Use the intended runtime's `init-db` before that runtime. Retain expanded schema and credentials for a compatible runtime rollback; older provenance-unaware initialization/sync can disable owner-created profiles and erase API-key hashes. Do not run it during fallback. Only one public release currently exists; existing-schema tests are not evidence of an upgrade between public releases.
 
-For a separately verified compatible stored Helm revision, replace all placeholders before use:
+Do not configure automatic old-runtime rollback for this upgrade. Once candidate API rollout may have started, prefer a compatible forward fix. A point-in-time unused-state check is not a credential-write fence; an owner could change credentials immediately afterward. A prior-runtime fallback needs a separately established fence held through cutover and verification of both credential and notification compatibility. Suppressing Helm hooks alone does not provide that fence or make older code understand additional keys. This guide makes no production rollback claim. Never attach the installation to an unrelated database.
 
-```sh
-helm --kube-context CONTEXT --namespace NAMESPACE rollback RELEASE REVISION \
-  --no-hooks --wait --timeout 10m
-```
+### Owner credential schema upgrade
 
-Suppressing hooks does not undo a schema upgrade or make incompatible code safe. This guide makes no production rollback claim. Never attach the installation to an unrelated database.
+The new `init-db` adds six `oauth_users` fields: `credential_generation`,
+`credential_baseline_set`, `configured_password_hash`, `configured_api_key_hash`,
+`password_source` and `api_key_source`. It also creates `participant_api_keys`
+and `credential_operations`, with their unique/hash/owner indexes. The first
+upgrade snapshots existing configured hashes; repeated initialization does not
+replace that baseline with later owner changes. Existing effective credentials,
+identities, memberships and callback configuration are retained.
+
+Initialize successfully before upgrading every API/worker process. Do not expose
+the new credential controls while older processes remain. No credential rotation
+or extra runtime configuration is required by this schema upgrade. Unchanged
+`sync-config` preserves owner edits; an explicitly changed configured credential
+remains authoritative, as described in [authentication](../api/authentication.md#owner-credential-management).
+
+After controls are used, older sync code can overwrite UI passwords or restore a
+retired configured key. Old runtimes also ignore added keys. Keep the expanded
+schema, current credentials and encryption/session keys; recover using compatible
+code. Do not run old `init-db`/`sync-config`, drop credential records or restore an
+entire older database as an automatic recovery step.
+
+### Informational MCP notifications
+
+New messages with either `needs_reply` value receive recipient sequences and
+can notify active recipient MCP subscriptions. False is informational: receiving
+clients read and deduplicate it without claiming, delegating work or replying
+automatically. Update receiving routines to honor this branch. Profile bearer
+webhooks keep their existing true-only contract.
+
+This change adds no schema or backfill. Older silent rows retain NULL recipient
+sequences and remain excluded from first subscription, refresh and replay.
+Existing cursors and event identities remain valid. Upgrade all API and worker
+processes before relying on the new behavior: old API writers still omit false
+receipts, and an old subscription refresh can miss a new false-message gap until
+refreshed on compatible code. Retain current subscriptions and signing secrets;
+no new receiver registration is required by the upgrade.
 
 Work claims do not auto-expire. After a crash, inspect the prior outcome before `release-claim` for an exact message/claim; do not choose a new claim ID to bypass active work. Queued notifications are at least once; callback acceptance is receipt rather than completion. See [the API](../api/contract.md).

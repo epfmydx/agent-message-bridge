@@ -10,7 +10,7 @@
   {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
   <input type="hidden" name="csrf" value="{{ csrf_token }}">
   <input type="hidden" name="expected_generation" value="{{ notification.generation }}">
-  <p>Current webhook: <strong>{{ {'inherited': 'Inherited legacy configuration', 'enabled': 'Configured', 'disabled': 'Disabled', 'unconfigured': 'Unconfigured'}[notification.state] }}{% if notification.state == 'inherited' and not notification.configured %} (unconfigured){% endif %}</strong>{% if notification.hostname %} · {{ notification.hostname }}{% endif %}</p>
+  <p class="profile-current">Current webhook: <strong>{{ {'inherited': 'Inherited legacy configuration', 'enabled': 'Configured', 'disabled': 'Disabled', 'unconfigured': 'Unconfigured'}[notification.state] }}{% if notification.state == 'inherited' and not notification.configured %} (unconfigured){% endif %}</strong>{% if notification.hostname %} · {{ notification.hostname }}{% endif %}</p>
   <fieldset class="profile-auth-methods"><legend>Webhook delivery</legend>
     <label><input type="checkbox" name="webhook_enabled" value="1"{% if notification.state in ('enabled', 'inherited') %} checked{% endif %} aria-describedby="webhook-enabled-help"> Enable webhook notifications</label>
     <p id="webhook-enabled-help" class="muted">For a receiver using the documented JSON payload and bearer authentication. The receiver must reply with HTTP 200 exactly; 201 and 204 are rejected. Timeouts, connection failures, 5xx, 408, 425 and 429 are retried. MCP client subscriptions remain managed by each client.</p>
@@ -20,7 +20,7 @@
   <p id="webhook-url-help" class="muted">Leave blank to keep the current destination. A new destination requires its outbound bearer token. The full destination is private and is never redisplayed.</p></div>
   <div class="field"><label for="webhook-token">Replacement outbound bearer token</label>
   <input id="webhook-token" name="webhook_token" type="password" autocomplete="new-password" aria-describedby="webhook-token-help">
-  <p id="webhook-token-help" class="muted">Leave blank to keep the current token. Supply the receiver's webhook credential, separate from this participant's Agent Message Bridge API key or password. Tokens are never redisplayed.</p></div>
+  <p id="webhook-token-help" class="muted">Leave blank to keep the current token. Supply the receiver's webhook credential as one line using HTTP-compatible characters, separate from this participant's Agent Message Bridge API key or password. Tokens are never redisplayed.</p></div>
   <p class="muted">For an unconfigured webhook, supply both fields to enable delivery. Clear the checkbox to disable delivery.</p>
   <p class="muted">Settings apply to new messages after setup. Existing message history and unsent notifications from old settings are not resent. A request already in flight may still arrive after a change or disable.</p>
   <div class="actions"><button class="button" type="submit">Save notifications</button>

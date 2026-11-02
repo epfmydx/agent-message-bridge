@@ -15,11 +15,11 @@ from test_events import auth, send_to, subscribe, subscribe_params
 from test_files import FakeStore, fetch_bytes, import_params, upload_params
 
 
-def setup_messages(app, count=3):
+def setup_messages(app, count=3, needs_reply=True):
     client = app.test_client()
     sub = subscribe(client, app)["result"]
     for i in range(1, count+1):
-        assert send_to(client, app, "agent-b", f"reliable-{i}").status_code == 200
+        assert send_to(client, app, "agent-b", f"reliable-{i}", needs_reply=needs_reply).status_code == 200
     return client, sub
 
 
@@ -106,9 +106,10 @@ def test_cli_survives_exception_without_disclosing_dependency_details(bridge_app
     assert "worker_iteration_failed" in caplog.text and "sensitive-provider" not in caplog.text
 
 
-def test_provisional_cursor_and_out_of_order_gap_do_not_acknowledge_early(bridge_app):
+@pytest.mark.parametrize("needs_reply", [False, True])
+def test_provisional_cursor_and_out_of_order_gap_do_not_acknowledge_early(bridge_app, needs_reply):
     app = bridge_app
-    _, sub = setup_messages(app)
+    _, sub = setup_messages(app, needs_reply=needs_reply)
     sessions = app.extensions["sessions"]
     worker.deliver_one(sessions, app.config, lambda *a: (204, b""))
     assert checkpoint(app, sub["id"]) == (1, 1)
@@ -128,13 +129,14 @@ def test_provisional_cursor_and_out_of_order_gap_do_not_acknowledge_early(bridge
 
 
 @pytest.mark.parametrize("accept_first", [False, True])
-def test_replay_racing_inflight_accept_obeys_generation_and_rewinds(bridge_app, accept_first):
+@pytest.mark.parametrize("needs_reply", [False, True])
+def test_replay_racing_inflight_accept_obeys_generation_and_rewinds(bridge_app, accept_first, needs_reply):
     app = bridge_app
-    client, sub = setup_messages(app)
+    client, sub = setup_messages(app, needs_reply=needs_reply)
     sessions = app.extensions["sessions"]
     for _ in range(3): worker.deliver_one(sessions, app.config, lambda *a: (204, b""))
     assert checkpoint(app, sub["id"]) == (3, 3)
-    assert send_to(client, app, "agent-b", "inflight-four").status_code == 200
+    assert send_to(client, app, "agent-b", "inflight-four", needs_reply=needs_reply).status_code == 200
     entered, release = threading.Event(), threading.Event()
     def post(*args):
         entered.set()

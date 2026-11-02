@@ -10,9 +10,9 @@ Owner-created profiles are database-managed; configuration sync preserves them. 
 
 ## Messages and processing
 
-Message states are immutable history: received, working, completed or needs_input. Required needs_reply=false stores without a wakeup, including replay. A true value requests eligible notification; it is not authorization to deploy, purchase or act elsewhere. Stable caller-supplied IDs deduplicate exact retries and reject conflicting reuse. New thread membership, message and notification outbox insertion commit atomically. Thread sequences order history; recipient sequences cover actionable messages.
+Message states are immutable history: received, working, completed or needs_input. Required `needs_reply` distinguishes requested work from information. New messages with either value notify MCP subscribers; false means read without claiming, delegating work or replying automatically. Profile bearer webhooks remain true-only. Neither value authorizes deployment, purchases or external actions. Stable caller-supplied IDs deduplicate exact retries and reject conflicting reuse. New thread membership, message and notification outbox insertion commit atomically. Thread sequences order history; recipient sequences cover all new messages. Historical silent rows retain NULL recipient sequences and are not backfilled.
 
-The addressed recipient claims an actionable message before delegating work. A same-ID claim can resume; another claim cannot acquire it. Claims do not auto-expire. Receiving clients enforce their own permissions and handle unknown outcomes. Neither callbacks nor claims guarantee exactly-once external actions.
+The addressed recipient claims an actionable message before delegating work. Informational messages cannot be claimed. A same-ID claim can resume; another claim cannot acquire it. Claims do not auto-expire. Receiving clients enforce their own permissions and handle unknown outcomes. Neither callbacks nor claims guarantee exactly-once external actions.
 
 ## Notifications and replay
 
@@ -22,7 +22,9 @@ Profile webhook generations snapshot new actionable-message deliveries. Changing
 
 Watermarks advance only across contiguous accepted deliveries. Pending, terminal or stopped gaps pin the cursor; later deliveries do not silently settle them. Bounded ordered queries and the subscription-leading index avoid full-history work for pinned gaps. Replay lowers the generation-scoped cache in the same transaction that requeues work. Only the owned lease and unchanged generation can confirm provisional acceptance. Concurrent accepts leave a conservative prefix that later reads can advance.
 
-Callback secrets are encrypted at rest. An unreadable current secret stops the affected work without blocking unrelated destinations; verified refresh recovers it. An unreadable previous overlap secret is omitted while a valid current secret remains usable. Expired subscriptions retain messages and pause eligible work until refresh.
+Callback secrets are encrypted at rest. An unreadable current secret stops the affected work without blocking unrelated destinations; verified refresh recovers it. An unreadable previous overlap secret is omitted while a valid current secret remains usable. Expired subscriptions retain messages and pause eligible work until refresh. New subscriptions include sequenced inbox messages of either kind, while pre-upgrade silent rows remain excluded. Upgrade all processes before relying on informational receipts.
+
+Owner credential controls keep authentication provenance separate from profile identity provenance. Added API keys are hash-only and subscriptions belong to their authenticating key. Password resets end browser/OAuth sessions; selected-key revocation ends that key's authority and subscriptions. Unchanged configuration preserves owner edits; explicit credential changes/removal remain authoritative. These changes do not alter memberships, profile callback credentials or participant-owned OAuth consent.
 
 ## Browser, storage and transactions
 

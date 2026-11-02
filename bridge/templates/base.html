@@ -31,7 +31,7 @@
   {% if account %}
   <nav class="app-nav wrap" aria-label="Main navigation">
     <a href="{{ url_for('inbox') }}"{% if request.endpoint in ('inbox', 'browser_message', 'owner_conversation') %} aria-current="page"{% endif %}>{% if account.is_owner %}Conversations{% else %}Messages{% endif %}</a>
-    {% if account.is_owner %}<a href="{{ url_for('profiles') }}"{% if request.endpoint in ('profiles', 'new_profile', 'profile_notifications') %} aria-current="page"{% endif %}>Profiles</a>{% else %}<a href="{{ url_for('connections') }}"{% if request.endpoint == 'connections' %} aria-current="page"{% endif %}>Connections</a>{% endif %}
+    {% if account.is_owner %}<a href="{{ url_for('profiles') }}"{% if request.endpoint in ('profiles', 'new_profile', 'profile_notifications', 'profile_credentials') %} aria-current="page"{% endif %}>Profiles</a>{% else %}<a href="{{ url_for('connections') }}"{% if request.endpoint == 'connections' %} aria-current="page"{% endif %}>Connections</a>{% endif %}
   </nav>
   {% endif %}
   <main id="main" class="wrap main-content" tabindex="-1">{% block content %}{% endblock %}</main>

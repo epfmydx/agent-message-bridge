@@ -103,7 +103,8 @@ def subscribe(db, settings, params, token, verify, revalidate):
     encrypted = cipher.encrypt(secret.encode()).decode()
     if sub is None:
         if seq is not None: raise Invalid("Replay subscription is unavailable")
-        # Stored actionable inbox messages remain available before first connection.
+        # Sequenced inbox messages remain available before first connection.
+        # Historical silent messages have NULL sequences and stay excluded.
         sub = Subscription(id=ident, owner_id=token.owner_id, client_id=token.client_id, family=token.family,
                            callback=callback, secret=encrypted, start_sequence=0, generation=1, active=True, rotation_until=0,
                            acknowledged_sequence=0, acknowledged_generation=1)
@@ -136,7 +137,7 @@ def subscribe(db, settings, params, token, verify, revalidate):
         db.execute(update(Delivery).where(Delivery.subscription_id == sub.id, Delivery.state == "stopped")
                    .values(state="pending", reason="subscription_resumed", available_at=now()))
     queued = select(Delivery.message_id).where(Delivery.subscription_id == sub.id)
-    for message in db.scalars(select(Message).where(Message.recipient_id == sub.owner_id, Message.needs_reply.is_(True),
+    for message in db.scalars(select(Message).where(Message.recipient_id == sub.owner_id,
                                                   Message.recipient_sequence > sub.start_sequence, Message.id.not_in(queued))):
         db.add(Delivery(message_id=message.id, kind="mcp", destination="mcp:"+sub.id, subscription_id=sub.id))
     sub.expires_at = None if ttl is None else now()+ttl/1000

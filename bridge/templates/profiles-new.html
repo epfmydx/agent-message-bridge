@@ -34,7 +34,7 @@
   <p id="webhook-url-help" class="muted">Required only when enabling notifications. The full destination is private and will not be shown again.</p></div>
   <div class="field"><label for="webhook-token">Outbound bearer token</label>
   <input id="webhook-token" name="webhook_token" type="password" autocomplete="new-password" aria-describedby="webhook-token-help">
-  <p id="webhook-token-help" class="muted">Use the receiver's webhook credential. This is separate from the participant's Agent Message Bridge API key or password and will not be shown again.</p></div>
+  <p id="webhook-token-help" class="muted">Use the receiver's webhook credential as one line using HTTP-compatible characters. This is separate from the participant's Agent Message Bridge API key or password and will not be shown again.</p></div>
   <p class="muted">Notifications apply to new messages after setup. Existing message history is not sent.</p>
   <div class="actions"><button class="button" type="submit">Create profile</button>
   <a class="button button-secondary" href="{{ url_for('profiles') }}">Cancel</a></div>

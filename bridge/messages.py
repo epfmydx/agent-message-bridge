@@ -95,18 +95,20 @@ def send_message(db, settings, owner, params):
             if not shared: raise Unavailable("Attachment is not shared in this thread")
     thread.sequence += 1
     recipient = participant(db, recipient_id)
-    notify = params["needs_reply"]
-    if notify: recipient.sequence += 1
+    # Every new inbox message is eligible for MCP receipt notifications. Retain
+    # NULL sequences on historical silent messages so catch-up cannot wake them.
+    recipient.sequence += 1
     row = Message(id=ident, thread_id=thread.id, sender_id=owner, recipient_id=recipient_id, reply_to=reply_to, text=text,
-                  status=status, needs_reply=notify, sequence=thread.sequence,
-                  recipient_sequence=recipient.sequence if notify else None, fingerprint=fingerprint, created_at=now())
+                  status=status, needs_reply=params["needs_reply"], sequence=thread.sequence,
+                  recipient_sequence=recipient.sequence, fingerprint=fingerprint, created_at=now())
     db.add(row)
     db.flush()
     db.add_all([MessageArtifact(message_id=row.id, artifact_id=a) for a in attachments])
-    if notify:
-        for sub in db.scalars(select(Subscription).where(Subscription.owner_id == recipient_id, Subscription.active.is_(True),
-                             or_(Subscription.expires_at.is_(None), Subscription.expires_at > now()))):
-            db.add(Delivery(message_id=row.id, kind="mcp", destination="mcp:"+sub.id, subscription_id=sub.id))
+    for sub in db.scalars(select(Subscription).where(Subscription.owner_id == recipient_id, Subscription.active.is_(True),
+                         or_(Subscription.expires_at.is_(None), Subscription.expires_at > now()))):
+        db.add(Delivery(message_id=row.id, kind="mcp", destination="mcp:"+sub.id, subscription_id=sub.id))
+    # Profile bearer callbacks keep their existing actionable-only contract.
+    if row.needs_reply:
         from .profile_webhooks import generation, should_notify
         if should_notify(settings, recipient):
             kind = "webhook"
@@ -140,7 +142,8 @@ def list_threads(db, owner):
 
 def claim_message(db, owner, params):
     row = message_access(db, owner, params.get("message_id"))
-    if row.recipient_id != owner or not row.needs_reply: raise Invalid("Only the addressed recipient can claim actionable work")
+    if row.recipient_id != owner: raise Invalid("Only the addressed recipient can claim actionable work")
+    if not row.needs_reply: raise Invalid("This message is informational and cannot be claimed")
     participant(db, owner, lock=True)
     claim_id = nonempty(params.get("claim_id"))
     prior = db.get(WorkClaim, row.id, with_for_update=True, populate_existing=True)

@@ -1,5 +1,58 @@
 # Verification
 
+## Combined 0.1.1 source candidate, 2 November 2026 UTC
+
+The candidate combines per-profile bearer webhooks, owner credential controls,
+neutral native-select styling and informational MCP receipts. It preserves the
+generic event/configuration names, MIT license, fictional examples and tag-only
+source workflow. No application image was built or published.
+
+- Complete Python 3.15 SQLite suite: **489 passed, 21 PostgreSQL-only skips**,
+  150.78 seconds. Complete disposable PostgreSQL **18.6** suite: **509 passed,
+  1 SQLite-plan-only skip**, 240.21 seconds. The PostgreSQL container was removed;
+  no production database was used. Focused credential/schema/UI/informational
+  and asset checks passed **52 tests**, with nine PostgreSQL-only skips.
+- Credential tests cover password/session invalidation, one-time hash-only keys,
+  overlapping-key handover, selected-key subscription revocation, unchanged and
+  explicitly changed configuration, owner/participant/CSRF boundaries, stale and
+  interrupted forms, OAuth consent races and PostgreSQL lock ordering. Key
+  timestamps retain the public interface's UTC convention.
+- Informational-message tests cover fresh/expired subscriptions, recipient
+  isolation, mixed true/false ordering, deduplication, attachments, catch-up,
+  replay/accept races and nonclaimability. Historical silent NULL sequences stay
+  excluded. Profile bearer callbacks retain their true-only gate.
+- A 19-phase synthetic source rehearsal upgraded the published 0.1.0 runtime's
+  SQLite data, repeated initialization/sync, retained existing rows, exercised
+  owner credential changes and verified compatible snapshot recovery in a
+  disposable database. It reproduced older code ignoring added keys and old
+  sync restoring former configured credentials. This demonstrates why automatic
+  old-runtime downgrade is unsafe; it is not a production recovery rehearsal.
+  PostgreSQL upgrade/locking coverage comes from the native suite above.
+- Native Chromium checks at 1440×1000, 390×844 and 320×740 inspected the actual
+  neutral interface. Pair selection worked with native typeahead, Tab and Enter.
+  Selects remained 48px high without document overflow. Disabled controls were
+  skipped by Tab; the local error-state fixture retained its two-pixel border
+  and focus ring. Password-impact and selected-key revoke disclosures opened by
+  keyboard and Cancel left credentials unchanged. Configured and email-less
+  owner-created profiles showed the correct distinct copy, blank secret fields
+  and UTC key timestamps. Eleven synthetic captures were saved; no console
+  warning/error was observed. The preview, temporary data, tab and viewport
+  override were removed.
+- Content/credential patterns, private-marker inspection, documentation map and
+  local links, version consistency, Helm lint, both browser-script syntax checks
+  and whitespace checks passed. License/notices, dependencies, setup templates,
+  source-only workflow, fictional attachments/conversations and the README's
+  hypothetical team-handoff section are unchanged.
+
+No live profile, key, grant, message or external notification was created. The
+source-only candidate does not establish provider interoperability or production
+acceptance. Native option menus remain platform-controlled and long selected
+labels clip within their closed control. Physical mobile hardware, speech
+assistive technology and the real OS clipboard were not tested; reveal/copy
+failure behavior is covered by the DOM harness. Informational MCP notification
+is an intentional default behavior change, with no historical backfill. No new
+quota, receiver allowlist, feature flag or retention restriction was added.
+
 ## Local source candidate 0.1.0, 1 November 2026 UTC
 
 This source candidate uses generic participant/webhook/S3 names, a configured-host login limiter and neutral local UI assets. It retains profile provenance, OAuth/key authentication, thread/file privacy, claims, delivery leases/replay and keyset history. Browser timestamps display UTC without changing stored epoch times or ordering. Source release metadata is 0.1.0; no public tag or deployment is implied by local checks.

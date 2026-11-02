@@ -34,9 +34,39 @@ Database initialization calls `ensure_browser_indexes(engine)` after table creat
 
 The owner navigation adds **Profiles**. `/profiles` lists participant IDs, display names, authentication methods and active state with signed keyset pagination. **Add profile** opens `/profiles/new`: enter a display name, optionally choose a stable ID, then choose **OAuth / email login** or **API key only**. Email and password are required for login; email is optional for key-only profiles. A blank stable ID is generated. The new identity is a participant, separate from the owner account. It receives no existing-thread membership or OAuth consent. Conversation viewing remains read-only. Add profile also offers optional webhook enable, HTTPS destination and outbound bearer token fields; authentication and notifications are separate choices. New profiles have webhook delivery disabled unless configured during creation.
 
-Creation requires the existing browser origin checks, an active owner session and CSRF token. A signed owner-bound form token prevents a repeated submission from creating another identity or redisplaying a key; independently opened forms remain usable. Names and IDs are escaped. Errors retain only nonsecret fields. Passwords and API keys are stored as hashes. An API key appears only in the successful creation response, with no-store caching; it is not placed in cookies, links or later profile lists. Save it before leaving. If that response is lost after creation, the key cannot be recovered; credential replacement is separate from this creation interface. OAuth profiles sign in as the participant and approve their own connections. These are bridge credentials, not external model-provider keys.
+Creation requires the existing browser origin checks, an active owner session and CSRF token. A signed owner-bound form token prevents a repeated submission from creating another identity or redisplaying a key; independently opened forms remain usable. Names and IDs are escaped. Errors retain only nonsecret fields. Passwords and API keys are stored as hashes. An API key appears only in the successful creation response, with no-store caching; it is not placed in cookies, links or later profile lists. Save it before leaving. If that response is lost after creation, the key cannot be recovered; the Credentials page can create a replacement. OAuth profiles sign in as the participant and approve their own connections. These are bridge credentials, not external model-provider keys.
+
+## Profile credentials
+
+Each active profile has visible **Credentials** and **Notifications** actions.
+Credentials opens `/profiles/credentials?profile_id=…` with separate Sign-in and
+API access sections. **Reset password** expands its impact warning and matching
+new-password fields; saving ends that participant's existing browser/OAuth
+sessions. An email-less profile explains why password login is unavailable.
+The page cannot edit email, stable ID or external provider credentials.
+
+**Create replacement key** keeps existing keys active and opens a one-time masked
+key view with Show/Hide and Copy controls. Clipboard failure selects the field
+and explains revealing/selecting the field for manual copying. Without JavaScript,
+Show/Copy controls are unavailable and the page explains recovery by key ID.
+Back to credentials shows nonsecret key IDs, origin and creation
+times in UTC, matching the rest of the interface. **Revoke** expands an explicit selected-key confirmation and Cancel;
+viewing a page or opening the confirmation changes no credentials. Update clients
+and their key-scoped subscriptions before revoking the old key. A lost response
+cannot redisplay a secret: revoke the unavailable key by its ID and create another.
+
+Origin checks, active owner session and CSRF protect every change. Signed form
+tokens bind owner, profile, action and selected key. A generation conflict or
+repeated committed submission returns 409 with current metadata, never an echoed
+password/key. Configuration precedence and revocation effects are described in
+[authentication](authentication.md#owner-credential-management).
+The owner remains outside participant OAuth consent and connection management.
 
 The conversation list defaults to **All pairs**. Choose two different profiles and select **Show pair** to show only threads whose membership is exactly that unordered pair: A↔B and B↔A select the same set. Inactive profiles remain selectable for historical conversations. Empty pair threads and multiple threads for the same pair are retained. Other pairs and any manually populated group thread are excluded from a pair selection. Latest activity, empty-thread order and browser page sizing are unchanged. Signed list/history cursors bind the selected pair; changing the pair requires starting a fresh page, while reversing the two inputs is equivalent. Pagination, Refresh and conversation return links retain the selection. Participant sessions cannot use this owner filter to expand their visibility.
+
+Profile choices use native select controls with the application's typography,
+square borders, a CSS-only chevron, 48px height and visible keyboard focus. The options menu remains
+platform-native. Forced-colors mode restores the native indicator.
 
 Conversation bubble sides use stable participant IDs within each thread, independent of the designated legacy notification participant. Initial messages and older/newer feeds use the same alignment. There is no group-chat creation, owner message composer or automatic conversation merger. The profile-schema upgrade is required before running this candidate; see [setup](../operations/setup.md). These local changes are not yet deployed.
 

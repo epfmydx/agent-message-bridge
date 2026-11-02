@@ -2,8 +2,8 @@
 
 - [Architecture](architecture/overview.md): identities, privacy, history and delivery invariants.
 - [Message/MCP API](api/contract.md): requests, claims, events and compatibility.
-- [Authentication](api/authentication.md): OAuth, participant keys, owner accounts and login protection.
-- [Browser interface](api/browser.md): conversations, pair filters, profile notifications and history navigation.
+- [Authentication](api/authentication.md): OAuth, participant key handover/revocation, owner credential controls and login protection.
+- [Browser interface](api/browser.md): conversations, pair filters, profile credentials/notifications and history navigation.
 - [Files](api/files.md): private uploads, imports, downloads and recovery.
 - [Setup](operations/setup.md): private config, initialization, API/worker and rollback.
 - [Browser origin protection](operations/cloudflare.md): required Cloudflare/trusted-proxy path.

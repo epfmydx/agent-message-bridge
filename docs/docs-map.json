@@ -18,7 +18,8 @@
         "bridge/login_rate.py",
         "bridge/models_auth.py",
         "bridge/templates/*.html",
-        "bridge/profiles.py"
+        "bridge/profiles.py",
+        "bridge/credentials.py"
       ],
       "documents": [
         "docs/api/authentication.md"

@@ -1,7 +1,7 @@
 """OAuth credentials are opaque to clients and stored only as SHA-256 hashes."""
 import hmac
 
-from sqlalchemy import Boolean, Float, ForeignKey, Index, JSON, String
+from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .models import Base, now, uid
@@ -37,12 +37,39 @@ class User(Base):
     creation_token_hash: Mapped[str | None] = mapped_column(String, nullable=True)
     password_hash: Mapped[str] = mapped_column(String)
     api_key_hash: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    credential_generation: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    credential_baseline_set: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    configured_password_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    configured_api_key_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    password_source: Mapped[str | None] = mapped_column(String, nullable=True)
+    api_key_source: Mapped[str | None] = mapped_column(String, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     __table_args__ = (Index("uq_oauth_users_creation_token_hash", "creation_token_hash", unique=True),)
 
     def get_user_id(self):
         return self.id
+
+
+class APIKey(Base):
+    """Additional service credentials; the raw value is never retained."""
+    __tablename__ = "participant_api_keys"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("oauth_users.id"), index=True)
+    key_hash: Mapped[str] = mapped_column(String, unique=True)
+    source: Mapped[str] = mapped_column(String, default="database")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[float] = mapped_column(Float, default=now)
+
+
+class CredentialOperation(Base):
+    """Committed form receipts prevent duplicate actions after a lost response."""
+    __tablename__ = "credential_operations"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("oauth_users.id"), index=True)
+    purpose: Mapped[str] = mapped_column(String)
+    key_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, default=now)
 
 
 class Client(Base):

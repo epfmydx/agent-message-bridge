@@ -1,7 +1,8 @@
 """Owner-managed participant provisioning; credentials remain outside sessions."""
 import secrets
+from datetime import datetime, timezone
 
-from flask import abort, current_app, g, redirect, render_template, request, url_for
+from flask import abort, current_app, g, make_response, redirect, render_template, request, session, url_for
 from itsdangerous import BadData, URLSafeSerializer
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
@@ -10,7 +11,7 @@ from werkzeug.security import generate_password_hash
 from .auth import browser_owner, browser_user, check_csrf, csrf, digest
 from .errors import Conflict, Invalid
 from .models import Participant, uid
-from .models_auth import BrowserOwner, User
+from .models_auth import APIKey, BrowserOwner, User
 from .profile_webhooks import update_webhook, view_webhook
 
 
@@ -64,6 +65,22 @@ def _form_signer():
     return URLSafeSerializer(current_app.secret_key, salt="agent-message-bridge-profile-creation-v1")
 
 
+def _credential_signer():
+    return URLSafeSerializer(current_app.secret_key, salt="agent-message-bridge-profile-credentials-v1")
+
+
+def _credential_token(owner, profile_id, action, key_id=""):
+    return _credential_signer().dumps(dict(owner=owner.id, profile=profile_id, action=action,
+                                         key=key_id, nonce=secrets.token_urlsafe(32)))
+
+
+def _credential_response(template, **context):
+    response = make_response(render_template(template, **context))
+    response.headers["Content-Security-Policy"] = ("default-src 'none'; img-src 'self'; style-src 'self'; "
+        "script-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+    return response
+
+
 def _webhook_enabled():
     """Accept only the checkbox's explicit boolean representation."""
     if "webhook_enabled" not in request.form:
@@ -74,6 +91,94 @@ def _webhook_enabled():
 
 
 def install_profiles(app):
+    @app.route("/profiles/credentials", methods=["GET", "POST"])
+    def profile_credentials():
+        from .credentials import credential_view, create_api_key, reset_password, revoke_api_key
+        owner = _owner()
+        if not owner:
+            return redirect(url_for("login"))
+        if set(request.args) != {"profile_id"} or len(request.args.getlist("profile_id")) != 1:
+            abort(400)
+        profile_id = request.args["profile_id"]
+        error, status = None, 200
+        if request.method == "POST":
+            check_csrf()
+            if any(len(request.form.getlist(key)) != 1 for key in request.form):
+                abort(400)
+            action = request.form.get("action", "")
+            key_id = request.form.get("key_id", "")
+            allowed = {"csrf", "operation_token", "expected_generation", "action"}
+            if action == "reset_password":
+                allowed |= {"password", "password_confirmation"}
+            elif action == "revoke_key":
+                allowed.add("key_id")
+            elif action != "create_key":
+                abort(400)
+            if set(request.form) - allowed:
+                abort(400)
+            operation_token = request.form.get("operation_token", "")
+            try:
+                token = _credential_signer().loads(operation_token)
+                if (not isinstance(token, dict) or token.get("owner") != owner.id
+                        or token.get("profile") != profile_id or token.get("action") != action
+                        or token.get("key") != key_id or not isinstance(token.get("nonce"), str)
+                        or not token["nonce"]):
+                    raise ValueError
+                generation = request.form.get("expected_generation", "")
+                if not generation.isascii() or not generation.isdecimal() or generation.startswith("0"):
+                    raise ValueError
+                generation = int(generation)
+            except (BadData, ValueError, TypeError):
+                abort(400)
+            lock_profile_changes(g.db)
+            if not _owner():
+                return redirect(url_for("login"))
+        participant = g.db.get(Participant, profile_id)
+        user = g.db.get(User, profile_id)
+        if not participant or not participant.active or not user or not user.active:
+            abort(404)
+        if request.method == "POST":
+            try:
+                with g.db.begin_nested():
+                    if action == "reset_password":
+                        password = request.form.get("password", "")
+                        if not password or password != request.form.get("password_confirmation", ""):
+                            raise Invalid("Enter matching passwords")
+                        reset_password(g.db, user, password, generation, operation_token)
+                    elif action == "create_key":
+                        raw_key, key_id = create_api_key(g.db, user, generation, operation_token)
+                    else:
+                        revoke_api_key(g.db, user, key_id, generation, operation_token)
+                g.db.commit()
+            except Invalid:
+                error = ("Enter matching new passwords. Email login requires an existing email address."
+                         if action == "reset_password" else "This API key is no longer available. Review the current keys.")
+                status = 400
+            except Conflict:
+                error = "Credentials changed or this form was already used. Review the current status before trying again. Keys cannot be shown again."
+                status = 409
+            else:
+                if action == "create_key":
+                    return _credential_response("profile-key-created.html", participant=participant,
+                                                api_key=raw_key, key_id=key_id, csrf_token=csrf())
+                session["profile_credential_notice"] = dict(profile=profile_id, action=action)
+                return redirect(url_for("profile_credentials", profile_id=profile_id), code=303)
+        view = credential_view(g.db, user)
+        for key in view["keys"]:
+            if key["created_at"] is not None:
+                key["created_at"] = datetime.fromtimestamp(key["created_at"], timezone.utc).strftime("%d %b %Y, %H:%M:%S UTC")
+        notice = session.pop("profile_credential_notice", None) if request.method == "GET" else None
+        if not isinstance(notice, dict) or notice.get("profile") != profile_id:
+            notice = None
+        tokens = {action: _credential_token(owner, profile_id, action)
+                  for action in ("reset_password", "create_key")}
+        revoke_tokens = {key["id"]: _credential_token(owner, profile_id, "revoke_key", key["id"])
+                         for key in view["keys"] if key["active"]}
+        response = _credential_response("profile-credentials.html", participant=participant, user=user,
+            credential=view, tokens=tokens, revoke_tokens=revoke_tokens, error=error, notice=notice, csrf_token=csrf())
+        response.status_code = status
+        return response
+
     @app.get("/profiles")
     def profiles():
         owner = _owner()
@@ -103,8 +208,10 @@ def install_profiles(app):
             next_url = url_for("profiles", page_size=size, cursor=cursor)
         notifications = {participant.id: view_webhook(current_app.config, participant)
                          for participant, _ in rows}
+        api_profiles = set(g.db.scalars(select(APIKey.owner_id).where(
+            APIKey.owner_id.in_([participant.id for participant, _ in rows]), APIKey.active.is_(True)))) if rows else set()
         return render_template("profiles.html", rows=rows, next_url=next_url,
-                               notifications=notifications)
+                               notifications=notifications, api_profiles=api_profiles)
 
     @app.route("/profiles/notifications", methods=["GET", "POST"])
     def profile_notifications():
@@ -146,7 +253,7 @@ def install_profiles(app):
                                    token=request.form.get("webhook_token", ""),
                                    expected_generation=generation)
             except Invalid:
-                error = "Enter an HTTPS destination and its outbound bearer token. A new destination requires a new token."
+                error = "Enter a public HTTPS destination and a single-line bearer token using HTTP-compatible characters. A new destination requires a new token."
                 status = 400
             except Conflict:
                 error = "These settings changed since this form was opened. Review the current status before saving again."
@@ -235,7 +342,7 @@ def install_profiles(app):
                     except IntegrityError:
                         error = "That ID, email or form has already been used. Open a new form or choose different details."
                     except (Invalid, Conflict):
-                        error = "Enter an HTTPS destination and its outbound bearer token to enable webhook notifications."
+                        error = "Enter a public HTTPS destination and a single-line bearer token using HTTP-compatible characters to enable webhook notifications."
                     else:
                         # Commit before exposing the key. Failure cannot render
                         # success or persist a raw credential in a cookie.

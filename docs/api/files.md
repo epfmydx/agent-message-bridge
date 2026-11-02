@@ -1,6 +1,6 @@
 # Private files
 
-Both authenticated participants use the same artifact flow. Authentication supplies the owner identity; request bodies cannot choose a sender, owner, bucket or object key. Messages accept ready artifacts owned by their authenticated sender, or ready artifacts already shared in that same authorized thread. The message transaction creates the sharing link before it queues any notification. `needs_reply=false` stores that message and its files without queuing a notification.
+Both authenticated participants use the same artifact flow. Authentication supplies the owner identity; request bodies cannot choose a sender, owner, bucket or object key. Messages accept ready artifacts owned by their authenticated sender, or ready artifacts already shared in that same authorized thread. The message transaction creates the sharing link before it queues any notification. New `needs_reply=false` messages can notify recipient MCP subscribers, including attachment-only messages; they remain informational and do not trigger profile bearer callbacks.
 
 An uploading participant can download their own ready artifact before sharing it. Another participant can download it only when a message references the artifact in a thread of which that participant is a member. Knowing an artifact ID or joining an unrelated thread does not grant access. Pending files cannot be downloaded or attached to messages.
 

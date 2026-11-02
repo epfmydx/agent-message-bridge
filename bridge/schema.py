@@ -5,7 +5,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.schema import CreateIndex
 
 from .models import BROWSER_INDEXES, DELIVERY_INDEXES
-from .models_auth import LoginRate
+from .models_auth import APIKey, CredentialOperation, LoginRate
 
 
 def _ensure_indexes(engine, indexes, purpose):
@@ -103,6 +103,21 @@ def _profile_columns(connection):
         if table == "oauth_users" and "creation_token_hash" not in names:
             connection.exec_driver_sql("ALTER TABLE oauth_users ADD COLUMN creation_token_hash VARCHAR")
     connection.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS uq_oauth_users_creation_token_hash ON oauth_users (creation_token_hash)")
+    names = {c["name"] for c in inspect(connection).get_columns("oauth_users")}
+    for name, definition in (
+            ("credential_generation", "INTEGER NOT NULL DEFAULT 1"),
+            ("credential_baseline_set", "BOOLEAN NOT NULL DEFAULT false"),
+            ("configured_password_hash", "VARCHAR"), ("configured_api_key_hash", "VARCHAR"),
+            ("password_source", "VARCHAR"), ("api_key_source", "VARCHAR")):
+        if name not in names:
+            connection.exec_driver_sql("ALTER TABLE oauth_users ADD COLUMN " + name + " " + definition)
+    # Only the first upgrade snapshots existing configured credentials. Repeated
+    # initialization must never mistake an owner's current value for config.
+    connection.execute(text("UPDATE oauth_users SET configured_password_hash=password_hash, "
+                            "configured_api_key_hash=api_key_hash, credential_baseline_set=true "
+                            "WHERE managed_source='config' AND credential_baseline_set=false"))
+    APIKey.__table__.create(connection, checkfirst=True)
+    CredentialOperation.__table__.create(connection, checkfirst=True)
     names = {c["name"] for c in inspect(connection).get_columns("participants")}
     for name, definition in (("webhook_enabled", "BOOLEAN"), ("webhook_url", "TEXT"),
                              ("webhook_token", "TEXT"), ("webhook_generation", "INTEGER NOT NULL DEFAULT 1")):
@@ -126,6 +141,8 @@ def ensure_profile_schema(engine):
     with a foreign-key check before commit. Failure rolls back the entire change.
     Run init-db before starting this version. Older sync code would deactivate
     database-managed profiles, so rollback requires preserving these identities.
+    Older credential sync also overwrites UI password changes and ignores added
+    keys: schema retention alone does not make runtime rollback safe after use.
     """
     if engine.dialect.name == "sqlite":
         import re
