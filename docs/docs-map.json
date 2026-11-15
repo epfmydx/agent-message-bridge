@@ -120,6 +120,21 @@
         "docs/operations/cloudflare.md",
         "docs/operations/setup.md"
       ]
+    },
+    "migration": {
+      "source": [
+        "bridge/migration.py",
+        "bridge/identities.py",
+        "bridge/invitations.py",
+        "bridge/lifecycle.py",
+        "bridge/profile_validation.py"
+      ],
+      "documents": [
+        "docs/operations/migration-v01.md",
+        "docs/api/authentication.md",
+        "docs/api/browser.md",
+        "docs/architecture/overview.md"
+      ]
     }
   }
 }

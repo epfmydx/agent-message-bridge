@@ -44,7 +44,7 @@ def template_app():
     for endpoint, path in {
         "inbox": "/", "login": "/login", "logout": "/logout",
         "connections": "/oauth/connections", "authorize": "/oauth/authorize",
-        "browser_message": "/message",
+        "browser_message": "/message", "owner_register": "/register",
         "browser_file": "/files/<artifact_id>/download",
     }.items():
         app.add_url_rule(path, endpoint, lambda **kwargs: "", methods=["GET", "POST"])

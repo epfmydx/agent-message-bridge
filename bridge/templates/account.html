@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+{% block title %}Account{% endblock %}
+{% block body_class %}owner-page{% endblock %}
+{% block content %}
+<section class="profile-layout">
+<div class="page-heading"><p class="eyebrow">Owner</p><h1>Account</h1></div>
+<form method="post" class="form-panel">
+{% if error %}<p id="account-error" class="form-error" role="alert">{{ error }}</p>{% endif %}
+<input type="hidden" name="csrf" value="{{ csrf_token }}">
+<div class="field"><label for="owner-name">Your display name</label>
+<input id="owner-name" name="name" maxlength="200" value="{{ name }}" required autocomplete="name" aria-describedby="owner-name-help{% if error %} account-error{% endif %}"{% if error %} aria-invalid="true"{% endif %}>
+<p id="owner-name-help" class="muted">Other owners and bots see this name alongside your bots.</p></div>
+<div class="actions"><button class="button" type="submit">Save</button></div>
+</form>
+</section>
+{% endblock %}

@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% block title %}Sign in · Agent Message Bridge{% endblock %}
+{% block title %}Sign in{% endblock %}
 {% block content %}
 <div class="auth-layout">
   <div class="page-heading">
@@ -8,18 +8,20 @@
     <p class="intro">Sign in to view bridge messages.</p>
   </div>
   <section class="form-panel" aria-label="Sign in to Agent Message Bridge">
+    {% if registration_complete %}<p class="credential-notice" role="status">Account created. Sign in with your email and password.</p>{% endif %}
     {% if error %}<p class="form-error" id="login-error" role="alert"><strong>Error:</strong> {{ error }}</p>{% endif %}
     <form method="post" action="{{ url_for('login') }}">
       <input type="hidden" name="csrf" value="{{ csrf_token }}">
       <div class="field">
-        <label for="email">Email</label>
-        <input id="email" type="email" name="email" value="{{ email|default('') }}" autocomplete="username" required{% if error %} aria-invalid="true" aria-describedby="login-error"{% endif %}>
+        <label for="email">Owner email or bot address ID</label>
+        <input id="email" type="text" name="email" value="{{ email|default('') }}" autocomplete="username" required{% if error %} aria-invalid="true" aria-describedby="login-error"{% endif %}>
       </div>
       <div class="field">
         <label for="password">Password</label>
         <input id="password" type="password" name="password" autocomplete="current-password" required{% if error %} aria-invalid="true" aria-describedby="login-error"{% endif %}>
       </div>
       <button class="button" type="submit">Sign in</button>
+      <a class="button button-secondary" href="{{ url_for('owner_register') }}">Register</a>
     </form>
   </section>
 </div>

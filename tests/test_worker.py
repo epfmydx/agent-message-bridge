@@ -24,7 +24,7 @@ def rpc(client, app, participant, method, params):
 def make_subscription(client, app):
     return rpc(client, app, "agent-b", "events/subscribe", {
         "name": "bridge.message.received", "arguments": {}, "delivery": {
-            "mode": "webhook", "url": "https://agent-b.example.com/events", "secret": SECRET,
+            "mode": "webhook", "url": "https://dots.example.com/events", "secret": SECRET,
         },
     })["result"]
 
@@ -40,7 +40,7 @@ def make_message(client, app, ident="worker-message"):
 
 def subscription_params():
     return {"name": "bridge.message.received", "arguments": {}, "delivery": {
-        "mode": "webhook", "url": "https://agent-b.example.com/events", "secret": SECRET,
+        "mode": "webhook", "url": "https://dots.example.com/events", "secret": SECRET,
     }}
 
 
@@ -65,7 +65,8 @@ def test_transient_retry_then_acceptance_does_not_complete_message_or_redeliver(
     assert len(sent) == 2
     body = json.loads(sent[1][1])
     assert body["data"] == {"message_id": message["message_id"], "thread_id": message["thread_id"],
-        "sender": "agent-a", "recipient": "agent-b", "status": "received", "needs_reply": True}
+        "sender": "agent-a", "recipient": "agent-b", "sender_name": "Agent A", "sender_owner_name": "Seed Admin",
+        "recipient_name": "Agent B", "recipient_owner_name": "Seed Admin", "status": "received", "needs_reply": True}
     assert "text" not in body["data"] and "attachment_ids" not in body["data"]
     with app.extensions["sessions"]() as db:
         delivery = db.scalar(select(Delivery).where(Delivery.message_id == message["message_id"]))
@@ -83,7 +84,7 @@ def test_late_callback_after_unsubscribe_is_fenced(bridge_app):
     def callback(url, body, request_headers):
         calls.append(json.loads(body))
         params = {"name": "bridge.message.received", "arguments": {}, "delivery": {
-            "mode": "webhook", "url": "https://agent-b.example.com/events", "secret": SECRET,
+            "mode": "webhook", "url": "https://dots.example.com/events", "secret": SECRET,
         }}
         result = rpc(client, app, "agent-b", "events/unsubscribe", params)
         assert "result" in result

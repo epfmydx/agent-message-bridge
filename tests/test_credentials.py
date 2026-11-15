@@ -107,7 +107,7 @@ def test_password_reset_revokes_only_oauth_and_browser_digest(bridge_app):
     assert probe(app, old).status_code == probe(app, raw).status_code == 200
 
 
-def test_unchanged_sync_upgrade_preserves_ui_then_config_type_change_wins(bridge_app):
+def test_unchanged_admin_sync_and_upgrade_preserve_bot_credentials(bridge_app):
     app, sessions = bridge_app, bridge_app.extensions["sessions"]
     raw, key_id = make_key(app)
     old = app.extensions["test_credentials"]["agent-b"]
@@ -125,43 +125,6 @@ def test_unchanged_sync_upgrade_preserves_ui_then_config_type_change_wins(bridge
             assert not user.api_key_hash
     assert probe(app, old).status_code == 401
     assert probe(app, raw).status_code == 200
-    settings = dict(app.config, USERS=[dict(u) for u in app.config["USERS"]])
-    item = next(u for u in settings["USERS"] if u["id"] == "agent-b")
-    item["password_hash"] = generate_password_hash("synthetic-config-password")
-    with sessions.begin() as db:
-        bootstrap(db, settings)
-        assert check_password_hash(db.get(User, "agent-b").password_hash, "synthetic-config-password")
-        assert db.get(APIKey, key_id).active
-    item.pop("api_key_hash")
-    with sessions.begin() as db:
-        bootstrap(db, settings)
-        assert not db.get(APIKey, key_id).active
-        assert not db.get(Subscription, service_sub).active
-    assert probe(app, raw).status_code == 401
-    with sessions.begin() as db:
-        bootstrap(db, settings)
-        assert not db.get(APIKey, key_id).active
-
-
-def test_config_removal_revokes_all_and_unchanged_sync_cannot_reactivate(bridge_app):
-    app, sessions = bridge_app, bridge_app.extensions["sessions"]
-    raw, key_id = make_key(app)
-    with sessions.begin() as db:
-        oauth_connection(db)
-    settings = dict(app.config, USERS=[u for u in app.config["USERS"] if u["id"] != "agent-b"])
-    for _ in range(2):
-        with sessions.begin() as db:
-            bootstrap(db, settings)
-            assert not db.get(User, "agent-b").active
-            assert not db.get(Participant, "agent-b").active
-            assert not db.get(APIKey, key_id).active
-            assert not db.get(Family, "synthetic-family").active
-    assert probe(app, raw).status_code == 401
-    with sessions.begin() as db:
-        bootstrap(db, app.config)
-        assert db.get(User, "agent-b").active
-        assert not db.get(APIKey, key_id).active
-        assert not db.get(Family, "synthetic-family").active
 
 
 def test_replay_generation_rollback_and_input_rejections(bridge_app):
@@ -182,12 +145,12 @@ def test_replay_generation_rollback_and_input_rejections(bridge_app):
         assert not db.scalar(select(APIKey).where(APIKey.key_hash == digest(interrupted)))
         assert len(list(db.scalars(select(APIKey)))) == 1
         user.email = None
-        with pytest.raises(Invalid), db.begin_nested():
-            reset_password(db, user, "synthetic-password", user.credential_generation, "synthetic-no-email")
+        reset_password(db, user, "synthetic-password", user.credential_generation, "synthetic-no-email")
+        assert check_password_hash(user.password_hash, "synthetic-password")
     assert probe(app, raw).status_code == 200
 
 
-@pytest.mark.parametrize("change", ["selected-key", "configured-key", "profile-removal"])
+@pytest.mark.parametrize("change", ["selected-key", "profile-removal"])
 def test_subscribe_revalidates_after_auth_before_credential_change(bridge_app, change):
     app, sessions = bridge_app, bridge_app.extensions["sessions"]
     raw, key_id = make_key(app)
@@ -200,12 +163,8 @@ def test_subscribe_revalidates_after_auth_before_credential_change(bridge_app, c
                 user = db.get(User, "agent-b")
                 revoke_api_key(db, user, key_id, user.credential_generation, "synthetic-callback-revoke")
             else:
-                settings = dict(app.config, USERS=[dict(u) for u in app.config["USERS"]])
-                if change == "profile-removal":
-                    settings["USERS"] = [u for u in settings["USERS"] if u["id"] != "agent-b"]
-                else:
-                    next(u for u in settings["USERS"] if u["id"] == "agent-b")["api_key_hash"] = digest("synthetic-rotated-config")
-                bootstrap(db, settings)
+                db.get(Participant, "agent-b").active = False
+
     app.extensions["verify_callback"] = verified
     assert subscription(app, raw).status_code == 401
     assert observations == [False]
@@ -256,41 +215,6 @@ def test_concurrent_create_and_selected_revoke_use_one_generation(bridge_app):
         assert probe(app, results[0]).status_code == 200
 
 
-@pytest.mark.parametrize("rotate", [False, True])
-def test_concurrent_key_create_and_config_sync_preserve_authority(bridge_app, rotate):
-    app, sessions = bridge_app, bridge_app.extensions["sessions"]
-    settings = dict(app.config, USERS=[dict(u) for u in app.config["USERS"]])
-    if rotate:
-        next(u for u in settings["USERS"] if u["id"] == "agent-b")["api_key_hash"] = digest("synthetic-concurrent-config-key")
-    with sessions() as db:
-        generation = db.get(User, "agent-b").credential_generation
-    barrier = Barrier(2)
-    def create():
-        try:
-            with sessions.begin() as db:
-                user = db.get(User, "agent-b")
-                barrier.wait(10)
-                return create_api_key(db, user, generation, "synthetic-config-race-form")[0]
-        except Conflict:
-            return None
-    def sync():
-        barrier.wait(10)
-        with sessions.begin() as db:
-            bootstrap(db, settings)
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        generated, synchronized = pool.submit(create), pool.submit(sync)
-        raw = generated.result(timeout=20)
-        synchronized.result(timeout=20)
-    if rotate:
-        assert probe(app, "synthetic-concurrent-config-key").status_code == 200
-        if raw:
-            assert probe(app, raw).status_code == 401
-    else:
-        assert raw and probe(app, raw).status_code == 200
-    with sessions.begin() as db:
-        bootstrap(db, settings)
-    if rotate and raw:
-        assert probe(app, raw).status_code == 401
 
 
 @pytest.mark.parametrize("key_modes", [("legacy", "legacy"), ("legacy", "added"),
@@ -368,7 +292,7 @@ def test_postgres_overlapping_login_never_binds_old_password_to_reset_hash(profi
         monkeypatch.setattr(auth.hmac, "compare_digest", compared)
     def login_old():
         return post(client, "/login", data=dict(csrf=hidden(login_page, "csrf"),
-                    email="agent-b@example.com", password=old_password))
+                    email="agent-b", password=old_password))
     with ThreadPoolExecutor(max_workers=1) as pool:
         pending = pool.submit(login_old)
         try:
@@ -385,9 +309,9 @@ def test_postgres_overlapping_login_never_binds_old_password_to_reset_hash(profi
             assert cookie["credential"] == digest(old_hash)
     assert get(client, "/").status_code == 302
     page = get(client, "/login")
-    assert post(client, "/login", data=dict(csrf=hidden(page, "csrf"), email="agent-b@example.com",
+    assert post(client, "/login", data=dict(csrf=hidden(page, "csrf"), email="agent-b",
                                            password=old_password)).status_code == 200
-    assert post(client, "/login", data=dict(csrf=hidden(page, "csrf"), email="agent-b@example.com",
+    assert post(client, "/login", data=dict(csrf=hidden(page, "csrf"), email="agent-b",
                                            password="synthetic-reset-password")).status_code == 302
     assert get(client, "/").status_code == 200
 

@@ -14,15 +14,32 @@ from sqlalchemy import create_engine, event, select, text
 from sqlalchemy.engine import make_url
 from werkzeug.security import generate_password_hash
 
-from bridge.auth import bearer, bootstrap_users, digest, family_active, install_auth
+from bridge.auth import bearer, digest, family_active, install_auth
 from bridge.models import Base, Participant, Subscription, database
-from bridge.models_auth import Client, Code, Family, Token, User
+from bridge.models_auth import BrowserOwner, Client, Code, Family, Token, User
 
 BASE = "https://bridge.example.com"
 RESOURCE = BASE+"/mcp"
 CALLBACK = "https://client.example.com/callback"
 VERIFIER = "v"*64
 CHALLENGE = base64.urlsafe_b64encode(hashlib.sha256(VERIFIER.encode()).digest()).decode().rstrip("=")
+
+
+
+def seed_credentials(db, items):
+    from bridge.auth import deactivate_subscriptions
+    from bridge.credentials import revoke_password_connections, revoke_service_keys
+    for item in items:
+        user = db.get(User, item["id"])
+        if user is None:
+            user = User(id=item["id"], email=item["email"], password_hash=item["password_hash"], api_key_hash=item.get("api_key_hash"))
+            db.add(user)
+        else:
+            if user.password_hash != item["password_hash"]:
+                revoke_password_connections(db, user)
+            if user.api_key_hash != item.get("api_key_hash"):
+                revoke_service_keys(db, user)
+            user.password_hash, user.api_key_hash = item["password_hash"], item.get("api_key_hash")
 
 
 @pytest.fixture
@@ -44,9 +61,11 @@ def auth_app(tmp_path):
     Base.metadata.create_all(engine)
     app.extensions["sessions"] = sessions
     with sessions.begin() as db:
-        db.add(Participant(id="owner", name="Agent B"))
+        db.add(BrowserOwner(id="synthetic-owner", name="Owner", email="browser@example.com", password_hash=generate_password_hash("synthetic-owner-password")))
         db.flush()
-        bootstrap_users(db, [{"id":"owner", "email":"owner@example.com", "password_hash":generate_password_hash("synthetic-password")}])
+        db.add(Participant(id="owner", name="Agent B", owner_account_id="synthetic-owner"))
+        db.flush()
+        seed_credentials(db, [{"id":"owner", "email":"owner@example.com", "password_hash":generate_password_hash("synthetic-password")}])
 
     @app.before_request
     def start():
@@ -72,6 +91,8 @@ def auth_app(tmp_path):
     install_auth(app)
     from bridge.web import install_web
     install_web(app)
+    from bridge.invitations import install_invitations
+    install_invitations(app)
     try:
         yield app
     finally:
@@ -96,7 +117,7 @@ def register(client, method="none", **extra):
 
 def login(client):
     page = client.get("/login", base_url=BASE)
-    return client.post("/login", base_url=BASE, data={"csrf":csrf_from(page), "email":"owner@example.com", "password":"synthetic-password"})
+    return client.post("/login", base_url=BASE, data={"csrf":csrf_from(page), "email":"owner", "password":"synthetic-password"})
 
 
 def authorize(client, client_id, **extra):
@@ -149,7 +170,7 @@ def test_metadata_and_dcr_no_users_or_grants(auth_app):
 def test_pkce_csrf_and_exact_redirect(auth_app):
     client = browser(auth_app)
     cid = register(client).json["client_id"]
-    assert client.post("/login", base_url=BASE, data={"email":"owner@example.com", "password":"synthetic-password"}).status_code == 400
+    assert client.post("/login", base_url=BASE, data={"email":"owner", "password":"synthetic-password"}).status_code == 400
     assert authorize(client, cid, redirect_uri=CALLBACK+"/other").status_code == 400
     assert authorize(client, cid, code_challenge_method="plain").status_code == 400
     assert authorize(client, cid, code_challenge="", code_challenge_method="").status_code == 400
@@ -286,15 +307,15 @@ def test_no_password_grant_no_cross_client_revocation_or_query_injection(auth_ap
         assert register(client, redirect_uris=[uri]).status_code == 400
 
 
-def test_second_configured_user_issues_own_tokens_and_absent_users_deactivate(auth_app):
+def test_second_user_issues_own_tokens_without_changing_first(auth_app):
     client = browser(auth_app)
     second = {"id":"second", "email":"second@example.com", "password_hash":generate_password_hash("synthetic-password")}
     with auth_app.extensions["sessions"].begin() as db:
-        db.add(Participant(id="second", name="Agent A"))
+        db.add(Participant(id="second", name="Agent A", owner_account_id="synthetic-owner"))
         db.flush()
-        bootstrap_users(db, [second])
+        seed_credentials(db, [second])
     page = client.get("/login", base_url=BASE)
-    assert client.post("/login", base_url=BASE, data=dict(csrf=csrf_from(page), email=second["email"], password="synthetic-password")).status_code == 302
+    assert client.post("/login", base_url=BASE, data=dict(csrf=csrf_from(page), email=second["id"], password="synthetic-password")).status_code == 302
     cid = register(client).json["client_id"]
     fields = dict(response_type="code", client_id=cid, redirect_uri=CALLBACK, scope="bridge:messages", resource=RESOURCE,
                   code_challenge=CHALLENGE, code_challenge_method="S256")
@@ -305,7 +326,7 @@ def test_second_configured_user_issues_own_tokens_and_absent_users_deactivate(au
     assert token.status_code == 200
     assert probe(client, token.json["access_token"]).json["owner"] == "second"
     with auth_app.extensions["sessions"]() as db:
-        assert not db.get(User, "owner").active
+        assert db.get(User, "owner").active
 
 
 def test_dcr_code_only_and_metadata_are_not_fetched(auth_app):
@@ -412,7 +433,7 @@ def test_service_key_sender_binding_rotation_and_removal(auth_app):
     settings = [{"id":"owner", "email":"owner@example.com", "password_hash":"synthetic-password-hash",
                  "api_key_hash":digest("synthetic-service-key")}]
     with auth_app.extensions["sessions"].begin() as db:
-        bootstrap_users(db, settings)
+        seed_credentials(db, settings)
     result = probe(client, "synthetic-service-key")
     assert result.status_code == 200
     assert result.json["owner"] == "owner"
@@ -429,7 +450,7 @@ def test_service_key_sender_binding_rotation_and_removal(auth_app):
         headers={"Authorization":"Bearer synthetic-service-key"}).json["owner"] == "owner"
     settings[0]["api_key_hash"] = digest("rotated-synthetic-service-key")
     with auth_app.extensions["sessions"].begin() as db:
-        bootstrap_users(db, settings)
+        seed_credentials(db, settings)
     assert probe(client, "synthetic-service-key").status_code == 401
     rotated = probe(client, "rotated-synthetic-service-key")
     assert rotated.status_code == 200 and rotated.json["family"] != family
@@ -439,7 +460,7 @@ def test_service_key_sender_binding_rotation_and_removal(auth_app):
         assert db.get(Subscription, "service-sub").generation == 2
     settings[0].pop("api_key_hash")
     with auth_app.extensions["sessions"].begin() as db:
-        bootstrap_users(db, settings)
+        seed_credentials(db, settings)
     assert probe(client, "rotated-synthetic-service-key").status_code == 401
 
 
@@ -448,7 +469,7 @@ def test_password_rotation_ends_oauth_connections_and_browser_session(auth_app):
     cid = register(client).json["client_id"]
     credentials = exchange(client, cid, obtain_code(client, cid)).json
     with auth_app.extensions["sessions"].begin() as db:
-        bootstrap_users(db, [{"id":"owner", "email":"owner@example.com",
+        seed_credentials(db, [{"id":"owner", "email":"owner@example.com",
             "password_hash":generate_password_hash("rotated-synthetic-password")}])
     assert probe(client, credentials["access_token"]).status_code == 401
     assert refresh(client, cid, credentials["refresh_token"]).status_code == 400
@@ -466,33 +487,33 @@ def test_consent_escapes_registered_name_and_callback(auth_app):
     assert b"<script>" not in page.data and b"&lt;script&gt;" in page.data
 
 
-def test_two_active_agents_keep_oauth_and_service_identity_separate(auth_app):
+def test_two_active_kais_keep_oauth_and_service_identity_separate(auth_app):
     settings = [
         {"id":"owner", "email":"owner@example.com", "password_hash":generate_password_hash("synthetic-password"),
-         "api_key_hash":digest("agent_b-synthetic-key")},
+         "api_key_hash":digest("dots-synthetic-key")},
         {"id":"webhook", "email":"webhook@example.com", "password_hash":generate_password_hash("synthetic-password"),
          "api_key_hash":digest("webhook-synthetic-key")},
     ]
     with auth_app.extensions["sessions"].begin() as db:
-        db.add(Participant(id="webhook", name="Agent A"))
+        db.add(Participant(id="webhook", name="Agent A", owner_account_id="synthetic-owner"))
         db.flush()
-        bootstrap_users(db, settings)
-    agent_b, webhook = browser(auth_app), browser(auth_app)
-    assert probe(agent_b, "agent_b-synthetic-key").json["owner"] == "owner"
+        seed_credentials(db, settings)
+    dots, webhook = browser(auth_app), browser(auth_app)
+    assert probe(dots, "dots-synthetic-key").json["owner"] == "owner"
     assert probe(webhook, "webhook-synthetic-key").json["owner"] == "webhook"
-    cid = register(agent_b).json["client_id"]
-    credentials = exchange(agent_b, cid, obtain_code(agent_b, cid)).json
-    assert probe(agent_b, credentials["access_token"]).json["owner"] == "owner"
+    cid = register(dots).json["client_id"]
+    credentials = exchange(dots, cid, obtain_code(dots, cid)).json
+    assert probe(dots, credentials["access_token"]).json["owner"] == "owner"
     with auth_app.extensions["sessions"]() as db:
         family = db.scalar(select(Token)).family
     page = webhook.get("/login", base_url=BASE)
     assert webhook.post("/login", base_url=BASE, data=dict(csrf=csrf_from(page),
-        email="webhook@example.com", password="synthetic-password")).status_code == 302
+        email="webhook", password="synthetic-password")).status_code == 302
     page = webhook.get("/oauth/connections", base_url=BASE)
     assert family.encode() not in page.data
     assert webhook.post("/oauth/connections", base_url=BASE,
         data={"csrf":csrf_from(page), "family":family}).status_code == 302
-    assert probe(agent_b, credentials["access_token"]).status_code == 200
+    assert probe(dots, credentials["access_token"]).status_code == 200
 
 
 def test_postgres_password_rotation_during_refresh_has_no_family_fk_deadlock(auth_app):
@@ -535,7 +556,7 @@ def test_postgres_password_rotation_during_refresh_has_no_family_fk_deadlock(aut
         with sessions.begin() as db:
             # An actual bounded DB failure replaces an indefinitely hanging test.
             db.execute(text("SET LOCAL statement_timeout = '15s'"))
-            bootstrap_users(db, [{"id":"owner", "email":"owner@example.com", "password_hash":password_hash}])
+            seed_credentials(db, [{"id":"owner", "email":"owner@example.com", "password_hash":password_hash}])
 
     event.listen(engine, "after_cursor_execute", synchronize)
     try:

@@ -1,0 +1,3 @@
+{% macro bot_identity(name, owner_name, address_id, is_own=false, deactivated=false) -%}
+<span class="bot-identity">{{ name }} ({{ 'you' if is_own else owner_name }}) <span class="bot-identity-address">&lt;{{ address_id }}&gt;</span>{% if deactivated %} <span class="bot-identity-status">· deactivated</span>{% endif %}</span>
+{%- endmacro %}

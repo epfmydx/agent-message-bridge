@@ -41,9 +41,12 @@ class FakeStore:
 @pytest.fixture
 def files_db(tmp_path):
     engine, maker = database('sqlite:///' + str(tmp_path / 'files.db'))
+    from bridge.models_auth import BrowserOwner
     Base.metadata.create_all(engine)
     with maker() as db:
-        db.add_all([Participant(id=p, name=p) for p in ['a', 'b', 'c']])
+        db.add(BrowserOwner(id="file-owner", name="Files", email="files@example.com", password_hash="synthetic"))
+        db.flush()
+        db.add_all([Participant(id=p, name=p, owner_account_id="file-owner") for p in ['a', 'b', 'c']])
         db.commit()
         yield db
     engine.dispose()
@@ -321,11 +324,11 @@ def test_transition_ipv6_cannot_bypass_public_download_check(monkeypatch, encode
             pytest.fail('private embedded IPv4 must be rejected')
 
 
-def test_s3_presigning_uses_sigv4_private_acl_and_explicit_checksum_compatibility(monkeypatch):
+def test_spaces_presigning_uses_sigv4_private_acl_and_explicit_checksum_compatibility(monkeypatch):
     from urllib.parse import parse_qs, urlsplit
     from bridge.object_store import S3Store
     monkeypatch.setattr(socket, 'create_connection', lambda *args, **kwargs: pytest.fail('signing must stay offline'))
-    store = S3Store({'S3_ENDPOINT': 'https://s3.example.com', 'S3_REGION': 'sgp1',
+    store = S3Store({'S3_ENDPOINT': 'https://spaces.example.com', 'S3_REGION': 'sgp1',
         'S3_BUCKET': 'synthetic-private', 'S3_ACCESS_KEY': 'synthetic-access',
         'S3_SECRET_KEY': 'synthetic-secret'})
     config = store.client.meta.config

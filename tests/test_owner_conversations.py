@@ -71,6 +71,10 @@ def owner_conversations(bridge_app):
         db.add_all([Thread(id=ident, created_at=date, sequence=0) for ident, date in
             (("alpha", 10), ("beta", 20), ("gamma", 30), ("empty-a", 60), ("empty-b", 60), ("empty-old", 40))])
         db.flush()
+        from sqlalchemy import update
+        from bridge.models import Participant
+        db.execute(update(Participant).values(owner_account_id="owner-a"))
+        db.add_all([Member(thread_id=ident, participant_id="agent-b") for ident in ("empty-a", "empty-b", "empty-old")])
         db.add_all([Member(thread_id=ident, participant_id=p) for ident in ("alpha", "beta", "gamma")
             for p in ("agent-a", "agent-b")])
         for seq in range(1, 9):
@@ -90,7 +94,7 @@ def test_threads_last_sequence_date_ties_empty_group_and_stable_boundaries(owner
     assert [t["thread_id"] for t in first["threads"]] == ["beta", "gamma"]
     assert first["threads"][0]["last_message"]["sequence"] == 2
     assert first["threads"][0]["first_message_text"] == "Synthetic beta 1"
-    assert first["threads"][0]["participant_names"] == ["Agent A", "Agent B"]
+    assert [p["name"] for p in first["threads"][0]["participants"]] == ["Agent A", "Agent B"]
     second, _ = page(app, client, first["pagination"]["older_url"])
     assert [t["thread_id"] for t in second["threads"]] == ["alpha", "empty-b"]
     assert second["threads"][0]["last_message"]["sequence"] == 8
@@ -183,9 +187,9 @@ def test_html_history_cursors_preserve_owner_thread_size_and_purpose(owner_conve
     other = app.test_client()
     sign_in(app, other, "owner-b")
     assert get(other, url).status_code == 400
-    agent = app.test_client()
-    sign_in(app, agent, "agent-b", "participant")
-    assert get(agent, url).status_code == 404
+    kai = app.test_client()
+    sign_in(app, kai, "agent-b", "participant")
+    assert get(kai, url).status_code == 404
 
 
 @pytest.mark.parametrize("field,value", [("anchor", True), ("anchor", 1.0), ("anchor", "1"),
@@ -210,6 +214,8 @@ def test_empty_thread_poll_and_exact_opaque_query_identity(owner_conversations):
     opaque = "/../thread?x=1&slash=/ percent=%#fragment ü"
     with app.extensions["sessions"].begin() as db:
         db.add(Thread(id=opaque, created_at=70))
+        db.flush()
+        db.add(Member(thread_id=opaque, participant_id="agent-b"))
     threads, _ = page(app, client)
     href = next(t["url"] for t in threads["threads"] if t["thread_id"] == opaque)
     normalized = urljoin(BASE+"/some/path", href)
@@ -240,11 +246,11 @@ def test_cursor_binding_identity_thread_size_purpose_and_tampering(owner_convers
     sign_in(app, other, "owner-b")
     assert get(other, feed).status_code == 400
     assert get(other, listing["pagination"]["older_url"]).status_code == 400
-    agent = app.test_client()
-    sign_in(app, agent, "agent-b", "participant")
-    assert get(agent, feed).status_code == 404
-    assert get(agent, "/conversation?thread_id=alpha").status_code == 404
-    assert get(agent, listing["pagination"]["older_url"]).status_code == 400
+    kai = app.test_client()
+    sign_in(app, kai, "agent-b", "participant")
+    assert get(kai, feed).status_code == 404
+    assert get(kai, "/conversation?thread_id=alpha").status_code == 404
+    assert get(kai, listing["pagination"]["older_url"]).status_code == 400
 
 
 @pytest.mark.parametrize("path", ["/conversation", "/conversation?thread_id=", "/conversation?thread_id=a&thread_id=b",
@@ -337,6 +343,6 @@ def test_thread_list_bulk_loads_page_metadata_with_indexed_sequence_lookups(owne
     assert all(t["last_message"]["sequence"] == 20 for t in listing["threads"])
     assert all(t["first_message_text"].endswith(" 1") for t in listing["threads"])
     assert sum("message_artifacts" in statement for statement in statements) == 1
-    assert sum("thread_members" in statement for statement in statements) == 1
+    assert sum("thread_members" in statement for statement in statements) == 2  # scoped page plus bulk names
     assert len(statements) <= 9
     assert "ORDER BY messages.sequence DESC" in statements[1]

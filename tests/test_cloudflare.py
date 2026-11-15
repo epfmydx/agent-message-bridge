@@ -62,8 +62,8 @@ def test_origin_does_not_replace_password_or_csrf(bridge_app):
     assert client.get("/", base_url=BASE, headers=origin).location == "/login"
     page = client.get("/login", base_url=BASE, headers=origin)
     csrf = re.search(rb'name="csrf" value="([^"]+)"', page.data)[1].decode()
-    assert client.post("/login", base_url=BASE, headers=origin, data={"email": "agent-b@example.com", "password": "synthetic-password-agent-b"}).status_code == 400
-    login = client.post("/login", base_url=BASE, headers=origin, data={"csrf": csrf, "email": "agent-b@example.com", "password": "synthetic-password-agent-b"})
+    assert client.post("/login", base_url=BASE, headers=origin, data={"email": "agent-b", "password": "synthetic-password-agent-b"}).status_code == 400
+    login = client.post("/login", base_url=BASE, headers=origin, data={"csrf": csrf, "email": "agent-b", "password": "synthetic-password-agent-b"})
     assert login.status_code == 302 and login.location == "/"
     assert client.get("/", base_url=BASE).status_code == 403
     assert client.get("/", base_url=BASE, headers=origin).status_code == 200

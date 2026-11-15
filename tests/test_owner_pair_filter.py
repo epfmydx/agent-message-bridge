@@ -97,7 +97,10 @@ def owner_pairs(bridge_app):
     with app.extensions["sessions"].begin() as db:
         db.add_all([BrowserOwner(id=ident, name=ident, email=ident+"@example.com",
             password_hash="synthetic-owner-password-hash", active=True) for ident in ("owner-a", "owner-b")])
-        db.add_all([Participant(id=ident, name=name, active=True, sequence=0) for ident, name in (
+        db.flush()
+        from sqlalchemy import update
+        db.execute(update(Participant).values(owner_account_id="owner-a"))
+        db.add_all([Participant(id=ident, name=name, active=True, sequence=0, owner_account_id="owner-a") for ident, name in (
             (LEFT, "Alpha User"), (RIGHT, "Beta User"),
             (OTHER_LEFT, "Gamma User"), (OTHER_RIGHT, "Delta User"))])
         db.add_all([Thread(id=ident, created_at=created, sequence=0) for ident, created in (
@@ -134,7 +137,7 @@ def test_owner_pair_filter_selects_exact_pair_and_keeps_individual_threads(owner
     assert "pair-other-empty" not in {thread["thread_id"] for thread in listing["threads"]}
     empty = next(thread for thread in listing["threads"] if thread["thread_id"] == "pair-empty")
     assert empty["last_message"] is None
-    assert empty["participant_names"] == ["Alpha User", "Beta User"]
+    assert [p["name"] for p in empty["participants"]] == ["Alpha User", "Beta User"]
     reverse, _ = page(app, client, pair_url(RIGHT, LEFT, page_size=25))
     assert reverse["threads"] == listing["threads"]
 

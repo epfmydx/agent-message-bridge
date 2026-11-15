@@ -10,7 +10,7 @@ from bridge.models import Delivery, Message, Subscription
 
 
 EVENT_SECRET = "whsec_" + base64.b64encode(b"synthetic-webhook-signing-secret-32").decode()
-AGENT_B_CALLBACK = "https://agent-b.example.com/events"
+DOTS_CALLBACK = "https://dots.example.com/events"
 
 
 def auth(app, participant):
@@ -25,7 +25,7 @@ def rpc(client, app, participant, method, params=None, ident="test"):
     return response.get_json()
 
 
-def subscribe_params(callback=AGENT_B_CALLBACK, secret=EVENT_SECRET, **extra):
+def subscribe_params(callback=DOTS_CALLBACK, secret=EVENT_SECRET, **extra):
     return {"name": "bridge.message.received", "arguments": {}, "delivery": {
         "mode": "webhook", "url": callback, "secret": secret}, **extra}
 
@@ -52,7 +52,8 @@ def test_server_discovery_and_mcp_tool_event_schemas(bridge_app):
     event_list = rpc(client, app, "agent-b", "events/list")["result"]["events"]
     assert len(event_list) == 1 and event_list[0]["name"] == "bridge.message.received"
     assert set(event_list[0]["payloadSchema"]["required"]) == {
-        "message_id", "thread_id", "sender", "recipient", "status", "needs_reply"}
+        "message_id", "thread_id", "sender", "recipient", "sender_name", "sender_owner_name",
+        "recipient_name", "recipient_owner_name", "status", "needs_reply"}
 
 
 def test_subscription_catches_up_own_actionable_and_informational_inbox(bridge_app):
@@ -84,7 +85,7 @@ def test_subscription_verification_runs_without_transaction_and_rechecks_auth(br
     })
     assert response.status_code == 401
     # Revalidation is expected to fail after callback-side credential revocation.
-    assert observations == [(AGENT_B_CALLBACK, False)]
+    assert observations == [(DOTS_CALLBACK, False)]
     with app.extensions["sessions"]() as db:
         assert db.scalar(select(Subscription)) is None
 

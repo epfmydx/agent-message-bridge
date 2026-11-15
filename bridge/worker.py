@@ -15,10 +15,27 @@ log = logging.getLogger(__name__)
 
 
 def deliver_one(sessions, settings, post=None):
+    from .lifecycle import delivery_fence
+    with sessions() as db:
+        candidate = db.execute(select(Delivery.id, Message.recipient_id)
+            .join(Message, Message.id == Delivery.message_id).where(DELIVERY_ACTIVE_PREDICATE,
+                or_(and_(Delivery.state.in_(["pending", "retry"]), Delivery.available_at <= now()),
+                    and_(Delivery.state == "sending", Delivery.lease_until <= now())))
+            .order_by(Delivery.available_at, Delivery.id).limit(1)).first()
+    if candidate is None:
+        return False
+    # A separate transaction retains the shared fence across the dispatcher's
+    # lease commits and network call, without blocking ordinary profile updates.
+    with sessions.begin() as fence_db:
+        with delivery_fence(fence_db, candidate[1], shared=True):
+            return _deliver_one(sessions, settings, post, candidate[0])
+
+
+def _deliver_one(sessions, settings, post, delivery_id):
     from .auth import family_active
     post = post or post_callback
     with sessions() as db:
-        candidate = db.scalar(select(Delivery).where(DELIVERY_ACTIVE_PREDICATE,
+        candidate = db.scalar(select(Delivery).where(Delivery.id == delivery_id, DELIVERY_ACTIVE_PREDICATE,
                               or_(and_(Delivery.state.in_(["pending", "retry"]), Delivery.available_at <= now()),
                               and_(Delivery.state == "sending", Delivery.lease_until <= now()))).order_by(Delivery.available_at, Delivery.id).limit(1))
         if candidate is None: return False
@@ -53,7 +70,8 @@ def deliver_one(sessions, settings, post=None):
         if item.kind == "mcp":
             generation = sub.generation
             preview = events.watermark(db, sub, including=item.id)
-            body = canonical(events.payload(settings, db, sub, message, item, sequence=preview)).encode()
+            envelope = events.payload(settings, db, sub, message, item, sequence=preview)
+            body = canonical(envelope).encode()
             cipher = Fernet(settings["ENCRYPTION_KEY"].encode())
             try:
                 current = cipher.decrypt(sub.secret.encode()).decode()
@@ -71,7 +89,7 @@ def deliver_one(sessions, settings, post=None):
                     # Current was verified at subscription; do not turn a broken
                     # overlap signature into a permanent delivery failure.
                     log.warning("notification kind=mcp reason=previous_secret_unreadable")
-            headers = signed_headers(current, events.notification(message)["eventId"], body, sub.id, previous_secret=previous)
+            headers = signed_headers(current, envelope["eventId"], body, sub.id, previous_secret=previous)
             callback = sub.callback
         else:
             try:
@@ -86,7 +104,7 @@ def deliver_one(sessions, settings, post=None):
                 item.state, item.reason, item.available_at = "retry", "webhook_not_configured", now()+30
                 db.commit()
                 return True
-            body = canonical(events.notification(message)).encode()
+            body = canonical(events.notification(db, message)).encode()
             headers = {"Content-Type": "application/json", "Authorization": "Bearer "+credential}
         if len(body) > 262144:
             item.state, item.reason = "terminal", "protocol_payload_too_large"

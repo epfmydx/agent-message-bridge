@@ -1,11 +1,11 @@
-/* Agent Message Bridge product layout. Local presentation variables live in brand/tokens.css. */
+/* Agent Message Bridge product layout. Brand variables remain in brand/tokens.css. */
 :root { color-scheme: light; }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bridge-paper); color: var(--bridge-ink); font: var(--bridge-text-base)/var(--bridge-leading-body) var(--bridge-font); }
 a { color: inherit; text-underline-offset: .25em; }
 a:hover { text-decoration-thickness: 2px; }
-button, input, select { font: inherit; }
-button, a, input, select { -webkit-tap-highlight-color: transparent; }
+button, input, select, textarea { font: inherit; }
+button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
 :focus-visible { outline: var(--bridge-focus-width) solid var(--bridge-ink); outline-offset: var(--bridge-focus-offset); }
 ::selection { color: var(--bridge-paper); background: var(--bridge-ink); }
 h1, h2, p { margin: 0; }
@@ -35,13 +35,15 @@ form { margin: 0; }
 .eyebrow { color: var(--bridge-muted); font-size: var(--bridge-text-xs); line-height: 1.5; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 16px; }
 .page-heading { margin-bottom: 40px; }
 .intro { margin-top: 20px; max-width: var(--bridge-reading-width); color: var(--bridge-muted); }
-.auth-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 64px; max-width: 1056px; margin-inline: auto; padding-block: 32px; }
+.auth-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 64px; max-width: 1056px; margin-inline: auto; padding-block: 32px; }
 .auth-layout .intro { max-width: 32ch; }
+.auth-layout > * { min-width: 0; }
 .form-panel { border-top: 2px solid var(--bridge-ink); padding-top: 32px; }
 .field { margin-bottom: 24px; }
 .field label { display: block; font-size: var(--bridge-text-sm); font-weight: 700; margin-bottom: 8px; }
-.field input, .field select { display: block; width: 100%; min-height: 48px; border: 1px solid var(--bridge-control-border); border-radius: 0; background: var(--bridge-paper); color: var(--bridge-ink); padding: 10px 12px; font-size: var(--bridge-text-base); line-height: 1.4; }
-.field input:hover, .field select:hover { border-color: var(--bridge-ink); }
+.field input, .field select, .field textarea { display: block; width: 100%; min-height: 48px; border: 1px solid var(--bridge-control-border); border-radius: 0; background: var(--bridge-paper); color: var(--bridge-ink); padding: 10px 12px; font-size: var(--bridge-text-base); line-height: 1.4; }
+.field input:hover, .field select:hover, .field textarea:hover { border-color: var(--bridge-ink); }
+.field textarea { resize: vertical; }
 .field input[aria-invalid] { border: 2px solid var(--bridge-ink); padding: 9px 11px; }
 .field select { appearance: none; -webkit-appearance: none; padding-right: 40px; background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%); background-repeat: no-repeat; background-position: right 20px center, right 16px center; background-size: 5px 5px; box-shadow: none; cursor: pointer; }
 .field select:disabled { color: var(--bridge-muted); background-color: var(--bridge-soft); border-color: var(--bridge-rule); cursor: not-allowed; opacity: 1; }
@@ -113,7 +115,7 @@ code { font-family: inherit; font-size: var(--bridge-text-sm); word-break: norma
   .main-content { padding-block: 40px 56px; }
   h1 { font-size: var(--bridge-heading-md); }
   .page-heading { margin-bottom: 32px; }
-  .auth-layout { grid-template-columns: 1fr; gap: 0; padding-block: 0; }
+  .auth-layout { grid-template-columns: minmax(0, 1fr); gap: 0; padding-block: 0; }
   .auth-layout .intro { max-width: 100%; }
   .form-panel { padding-top: 24px; }
   .callback { padding: 16px; }
@@ -126,12 +128,12 @@ code { font-family: inherit; font-size: var(--bridge-text-sm); word-break: norma
   .app-footer > span { flex-basis: 100%; margin-left: 44px; }
 }
 @media (forced-colors: active) {
-  .button, .status, .field input, .field select { border-color: ButtonText; }
+  .button, .status, .field input, .field select, .field textarea { border-color: ButtonText; }
   .field select { appearance: auto; -webkit-appearance: auto; background-image: none; }
   :focus-visible { outline-color: Highlight; }
 }
 
-/* Owner conversations retain the existing interface type, rules and square controls. */
+/* Owner conversations retain the existing EPFMy type, rules and square controls. */
 [hidden] { display: none !important; }
 .owner-page .main-content { padding-block: 36px 40px; }
 .owner-page .app-header { min-height: 108px; padding-block: 20px; }
@@ -149,6 +151,7 @@ code { font-family: inherit; font-size: var(--bridge-text-sm); word-break: norma
 .profile-layout .field .muted { margin-top: 8px; font-size: var(--bridge-text-sm); }
 .profile-layout .form-panel > .actions { margin-top: 24px; }
 .profile-layout .form-panel > p + p { margin-top: 12px; }
+.profile-deactivate-form > .profile-auth-methods { margin-top: 24px; }
 .profile-current { margin-bottom: 24px; }
 .profile-auth-methods { border: 0; padding: 0; margin: 0 0 28px; }
 .profile-auth-methods legend { font-size: var(--bridge-text-sm); font-weight: 700; margin-bottom: 12px; }
@@ -296,3 +299,29 @@ code { font-family: inherit; font-size: var(--bridge-text-sm); word-break: norma
   .conversation-toolbar > p { flex-basis: 100%; }
   .conversation-message-meta a { margin-left: 0; }
 }
+
+/* Incoming policy stays usable without JavaScript. Inactive IDs are ignored by the server. */
+.reachability-form:not(:has(#policy option[value="allowlist"]:checked)) .selected-bots { display: none; }
+.reachability-help { margin-block: 24px; }
+.invitation-created .actions { margin-top: 24px; }
+.invitation-created > p { margin-bottom: 12px; }
+
+.invitation-created .field-label { font-size: var(--bridge-text-sm); font-weight: 700; margin-bottom: 8px; }
+.invitation-register-url { display: block; overflow-wrap: anywhere; }
+
+.bot-address { margin-block: 16px; }
+.bot-address label { display: block; font-size: var(--bridge-text-sm); font-weight: 700; margin-bottom: 8px; }
+.bot-address-control { display: flex; flex-wrap: wrap; gap: 8px; }
+.bot-address-control input { font: inherit; font-size: var(--bridge-text-sm); min-width: 0; width: 100%; min-height: 48px; padding: 10px 12px; border: 1px solid var(--bridge-control-border); background: var(--bridge-paper); color: var(--bridge-ink); }
+.bot-address .muted { margin-top: 8px; font-size: var(--bridge-text-sm); }
+.bot-address [data-address-status]:empty { display: none; }
+
+#sender_ids { font-size: var(--bridge-text-sm); }
+
+.bot-identity { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
+.bot-identity-address { display: inline-block; max-width: 100%; font-size: var(--bridge-text-xs); overflow-wrap: anywhere; }
+.bot-identity-status { display: inline-block; white-space: nowrap; }
+.profile-public-identity { margin-block: 0 24px; font-size: var(--bridge-text-sm); }
+
+.button-danger { background: var(--bridge-ink); border-color: var(--bridge-ink); color: #fff; }
+.button-danger:hover { background: var(--bridge-muted); border-color: var(--bridge-muted); color: #fff; }

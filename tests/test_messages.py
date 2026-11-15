@@ -25,19 +25,19 @@ def payload(message_id, recipient="agent-b", **overrides):
             "status": "received", "needs_reply": True, **overrides}
 
 
-def test_agent_a_message_agent_b_exact_read_reply_and_agent_a_webhook(bridge_app):
+def test_grok_message_dots_exact_read_reply_and_grok_webhook(bridge_app):
     from bridge.worker import deliver_one
     app, client = bridge_app, bridge_app.test_client()
-    original = send(client, app, "agent-a", payload("agent_a-request-1")).get_json()
+    original = send(client, app, "agent-a", payload("grok-request-1")).get_json()
     assert original["sender"] == "agent-a" and original["recipient"] == "agent-b"
     assert original["sequence"] == 1 and original["needs_reply"] is True
     assert original["text"] == "Please inspect this change."
-    fetched = client.get("/api/messages/agent_a-request-1", headers=bearer_headers(app, "agent-b"))
+    fetched = client.get("/api/messages/grok-request-1", headers=bearer_headers(app, "agent-b"))
     assert fetched.status_code == 200
     assert fetched.get_json() == {key: value for key, value in original.items() if key != "duplicate"}
 
     reply = send(client, app, "agent-b", payload(
-        "agent_b-reply-1", recipient="agent-a", thread_id=original["thread_id"],
+        "dots-reply-1", recipient="agent-a", thread_id=original["thread_id"],
         reply_to=original["message_id"], text="Inspection is complete.", status="completed",
     ))
     assert reply.status_code == 200, reply.get_json()
@@ -52,7 +52,8 @@ def test_agent_a_message_agent_b_exact_read_reply_and_agent_a_webhook(bridge_app
     assert url == "https://agent-a.example.com/bridge-hook"
     assert headers["Authorization"] == "Bearer synthetic-webhook-bearer"
     assert notification["data"] == {"message_id": reply_body["message_id"], "thread_id": original["thread_id"],
-        "sender": "agent-b", "recipient": "agent-a", "status": "completed", "needs_reply": True}
+        "sender": "agent-b", "recipient": "agent-a", "sender_name": "Agent B", "sender_owner_name": "Seed Admin",
+        "recipient_name": "Agent A", "recipient_owner_name": "Seed Admin", "status": "completed", "needs_reply": True}
     assert "text" not in notification["data"] and "attachment_ids" not in notification["data"]
     assert client.get("/api/messages/" + reply_body["message_id"], headers=bearer_headers(app, "agent-a")).status_code == 200
     with app.extensions["sessions"]() as db:
@@ -77,7 +78,7 @@ def test_informational_message_is_stored_and_caught_up_by_mcp(bridge_app):
         assert db.scalar(select(func.count(Delivery.id)).where(Delivery.message_id == closing["message_id"])) == 0
     subscription = client.post("/mcp", headers=bearer_headers(app, "agent-b"), json={
         "jsonrpc": "2.0", "id": "sub-close", "method": "events/subscribe", "params": {
-            "name": "bridge.message.received", "arguments": {}, "delivery": {"mode": "webhook", "url": "https://agent-b.example.com/events", "secret": "whsec_" + __import__("base64").b64encode(b"x" * 32).decode()}}})
+            "name": "bridge.message.received", "arguments": {}, "delivery": {"mode": "webhook", "url": "https://dots.example.com/events", "secret": "whsec_" + __import__("base64").b64encode(b"x" * 32).decode()}}})
     assert "result" in subscription.get_json()
     with app.extensions["sessions"]() as db:
         queued = list(db.scalars(select(Delivery).where(Delivery.message_id == closing["message_id"])))
@@ -90,7 +91,7 @@ def test_message_idempotency_and_conflicting_reuse(bridge_app):
     subscription = client.post("/mcp", headers=bearer_headers(app, "agent-b"), json={
         "jsonrpc": "2.0", "id": "idempotency-subscription", "method": "events/subscribe", "params": {
             "name": "bridge.message.received", "arguments": {}, "delivery": {
-                "mode": "webhook", "url": "https://agent-b.example.com/events",
+                "mode": "webhook", "url": "https://dots.example.com/events",
                 "secret": "whsec_" + base64.b64encode(b"synthetic-idempotency-secret-32").decode(),
             },
         },
@@ -146,13 +147,13 @@ def test_work_claim_is_unique_resumable_and_recipient_only(bridge_app):
     message = send(client, app, "agent-a", payload("claimable-message")).get_json()
     def claim(participant, claim_id):
         return client.post("/api/messages/claimable-message/claim", headers=bearer_headers(app, participant), json={"claim_id": claim_id})
-    first = claim("agent-b", "agent_b-run-a").get_json()
-    resumed = claim("agent-b", "agent_b-run-a").get_json()
-    competing = claim("agent-b", "agent_b-run-b").get_json()
+    first = claim("agent-b", "dots-run-a").get_json()
+    resumed = claim("agent-b", "dots-run-a").get_json()
+    competing = claim("agent-b", "dots-run-b").get_json()
     unauthorized = claim("agent-a", "sender-run")
     second_message = send(client, app, "agent-a", payload("second-claimable-message")).get_json()
     second_claim = client.post("/api/messages/second-claimable-message/claim",
-        headers=bearer_headers(app, "agent-b"), json={"claim_id": "agent_b-run-a"}).get_json()
+        headers=bearer_headers(app, "agent-b"), json={"claim_id": "dots-run-a"}).get_json()
     assert first == {"message_id": message["message_id"], "acquired": True, "resumed": False}
     assert resumed == {"message_id": message["message_id"], "acquired": True, "resumed": True}
     assert competing == {"message_id": message["message_id"], "acquired": False, "resumed": False}
@@ -160,7 +161,7 @@ def test_work_claim_is_unique_resumable_and_recipient_only(bridge_app):
     assert second_claim == {"message_id": second_message["message_id"], "acquired": True, "resumed": False}
     with app.extensions["sessions"]() as db:
         assert db.scalar(select(func.count(WorkClaim.message_id))) == 2
-        assert db.get(WorkClaim, message["message_id"]).claim_id == "agent_b-run-a"
+        assert db.get(WorkClaim, message["message_id"]).claim_id == "dots-run-a"
 
 
 def test_encoded_slash_message_ids_read_exactly_and_claim_route_preserves_suffix(bridge_app):

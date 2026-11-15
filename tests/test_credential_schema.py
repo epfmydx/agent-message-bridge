@@ -16,26 +16,26 @@ def old_schema(engine):
         db.exec_driver_sql("INSERT INTO oauth_users VALUES ('synthetic','synthetic@example.com','config',NULL,'synthetic-config-password','synthetic-config-key',true)")
 
 
-def test_additive_upgrade_backfills_baseline_once_and_serializes_repeated_init(tmp_path):
+def test_additive_upgrade_adds_generation_and_serializes_repeated_init(tmp_path):
     engine, _ = database("sqlite:///" + str(tmp_path / "credentials.sqlite"))
     old_schema(engine)
     with ThreadPoolExecutor(max_workers=2) as pool:
         list(pool.map(lambda _: ensure_profile_schema(engine), range(2)))
     assert {"participant_api_keys", "credential_operations"} <= set(inspect(engine).get_table_names())
     with engine.begin() as db:
-        row = db.execute(text("SELECT credential_generation,credential_baseline_set,configured_password_hash,configured_api_key_hash FROM oauth_users")).one()
-        assert tuple(row) == (1, 1, "synthetic-config-password", "synthetic-config-key")
+        row = db.execute(text("SELECT credential_generation,password_hash,api_key_hash FROM oauth_users")).one()
+        assert tuple(row) == (1, "synthetic-config-password", "synthetic-config-key")
         db.exec_driver_sql("UPDATE oauth_users SET password_hash='synthetic-ui-password', api_key_hash=NULL, password_source='database', api_key_source='database', credential_generation=3")
     ensure_profile_schema(engine)
     with engine.connect() as db:
-        row = db.execute(text("SELECT credential_generation,password_hash,api_key_hash,configured_password_hash,configured_api_key_hash FROM oauth_users")).one()
-        assert tuple(row) == (3, "synthetic-ui-password", None, "synthetic-config-password", "synthetic-config-key")
+        row = db.execute(text("SELECT credential_generation,password_hash,api_key_hash FROM oauth_users")).one()
+        assert tuple(row) == (3, "synthetic-ui-password", None)
         assert not db.exec_driver_sql("PRAGMA foreign_key_check").all()
         assert db.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
     engine.dispose()
 
 
-def test_interrupted_additive_upgrade_rolls_back_baseline_and_tables(tmp_path):
+def test_interrupted_additive_upgrade_rolls_back_columns_and_tables(tmp_path):
     engine, _ = database("sqlite:///" + str(tmp_path / "retry.sqlite"))
     old_schema(engine)
     def interrupt(connection, cursor, statement, *args):
@@ -57,7 +57,7 @@ def test_interrupted_additive_upgrade_rolls_back_baseline_and_tables(tmp_path):
     engine.dispose()
 
 
-def test_postgres_additive_upgrade_backfills_without_replacing_owner_changes(bridge_app):
+def test_postgres_additive_upgrade_preserves_owner_changes(bridge_app):
     engine = bridge_app.extensions["engine"]
     if engine.dialect.name != "postgresql":
         pytest.skip("Native PostgreSQL upgrade requires disposable TEST_DATABASE_URL")
@@ -65,15 +65,14 @@ def test_postgres_additive_upgrade_backfills_without_replacing_owner_changes(bri
     with engine.begin() as db:
         db.exec_driver_sql("DROP TABLE credential_operations")
         db.exec_driver_sql("DROP TABLE participant_api_keys")
-        for name in ("credential_generation", "credential_baseline_set", "configured_password_hash",
-                     "configured_api_key_hash", "password_source", "api_key_source"):
+        for name in ("credential_generation", "password_source", "api_key_source"):
             db.exec_driver_sql("ALTER TABLE oauth_users DROP COLUMN " + name)
     with ThreadPoolExecutor(max_workers=2) as pool:
         list(pool.map(lambda _: ensure_profile_schema(engine), range(2)))
     with engine.begin() as db:
-        baseline = db.execute(text("SELECT configured_password_hash,configured_api_key_hash FROM oauth_users WHERE id='agent-b'")).one()
+        baseline = db.execute(text("SELECT password_source,api_key_source FROM oauth_users WHERE id='agent-b'")).one()
         db.exec_driver_sql("UPDATE oauth_users SET password_hash='synthetic-ui-password',api_key_hash=NULL WHERE id='agent-b'")
     ensure_profile_schema(engine)
     with engine.connect() as db:
-        assert db.execute(text("SELECT configured_password_hash,configured_api_key_hash FROM oauth_users WHERE id='agent-b'")).one() == baseline
+        assert db.execute(text("SELECT password_source,api_key_source FROM oauth_users WHERE id='agent-b'")).one() == baseline
         assert db.exec_driver_sql("SELECT password_hash FROM oauth_users WHERE id='agent-b'").scalar() == "synthetic-ui-password"

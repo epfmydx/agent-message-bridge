@@ -10,6 +10,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import case, select, update
 
 from .errors import Invalid
+from .identities import load_identities, message_identity_fields
 from .messages import canonical, nonempty, participant, timestamp
 from .models import Delivery, Message, Subscription, now
 from .transport import secret_bytes
@@ -154,12 +155,13 @@ def unsubscribe(db, params, token):
     return {}
 
 
-def notification(message, checkpoint=None):
+def notification(db, message, checkpoint=None):
+    identities = load_identities(db, (message.sender_id, message.recipient_id))
     return {"eventId": str(uuid.uuid5(uuid.NAMESPACE_URL, "agent-message-bridge:message:"+message.id)), "name": EVENT_NAME,
             "timestamp": timestamp(message.created_at), "data": {"message_id": message.id, "thread_id": message.thread_id,
-            "sender": message.sender_id, "recipient": message.recipient_id, "status": message.status, "needs_reply": message.needs_reply}, "cursor": checkpoint}
+            "sender": message.sender_id, "recipient": message.recipient_id, **message_identity_fields(identities[message.sender_id], identities[message.recipient_id]), "status": message.status, "needs_reply": message.needs_reply}, "cursor": checkpoint}
 
 
 def payload(settings, db, sub, message, delivery, sequence=None):
     if sequence is None: sequence = watermark(db, sub, including=delivery.id)
-    return notification(message, cursor(settings, sub, sequence))
+    return notification(db, message, cursor(settings, sub, sequence))

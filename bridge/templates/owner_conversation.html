@@ -1,10 +1,11 @@
+{% from '_bot_identity.html' import bot_identity %}
 {% extends 'base.html' %}
-{% block title %}Conversation · Agent Message Bridge{% endblock %}
+{% block title %}Conversation{% endblock %}
 {% block body_class %}owner-page owner-conversation-page{% endblock %}
 {% block content %}
 <section class="owner-conversation" data-owner-conversation data-thread-id="{{ thread.thread_id }}" data-older-url="{{ older_url or '' }}" data-newer-url="{{ newer_url }}">
   <a class="text-link conversation-back" href="{{ list_url }}" data-back-list><span aria-hidden="true">←</span> Conversations</a>
-  <header class="conversation-heading"><div><p class="eyebrow">Conversation</p><h1>{{ thread.participant_names|join(' ↔ ') or 'No participants' }}</h1></div><span class="owner-readonly">Owner view · Read only</span></header>
+  <header class="conversation-heading"><div><p class="eyebrow">Conversation</p><h1>{% for person in thread.participants %}{{ bot_identity(person.name, person.owner_name, person.participant_id, person.is_own, person.deactivated) }}{% if not loop.last %} ↔ {% endif %}{% else %}No participants{% endfor %}</h1></div><span class="owner-readonly">Owner view · Read only</span></header>
   <details class="conversation-thread-id"><summary>Thread details</summary><p>{{ thread.thread_id }}</p></details>
   <div class="conversation-shell">
     <div class="conversation-scroll" role="region" aria-label="Conversation messages" tabindex="0" data-message-scroll>

@@ -64,6 +64,9 @@ def query_pages(bridge_app):
             password_hash="synthetic-query-owner-password-hash", active=True))
         db.add_all([Thread(id=f"query-thread-{i}", created_at=i) for i in range(6)])
         db.flush()
+        from sqlalchemy import update
+        from bridge.models import Participant
+        db.execute(update(Participant).values(owner_account_id="query-owner"))
         db.add_all([Member(thread_id=f"query-thread-{i}", participant_id=p)
                     for i in range(6) for p in ("agent-a", "agent-b")])
         for sequence in range(1, 206):

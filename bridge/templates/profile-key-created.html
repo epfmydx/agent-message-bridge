@@ -1,9 +1,11 @@
+{% from '_bot_identity.html' import bot_identity %}
 {% extends 'base.html' %}
-{% block title %}API key created · Agent Message Bridge{% endblock %}
+{% block title %}API key created{% endblock %}
 {% block body_class %}owner-page{% endblock %}
 {% block content %}
 <section class="profile-layout credential-layout">
-<div class="page-heading"><p class="eyebrow">Owner · {{ participant.name }}</p><h1>Save your API key</h1>
+<div class="page-heading">
+<p class="profile-public-identity">{{ bot_identity(participant.name, '', participant.id, true) }}</p><h1>Save your API key</h1>
 <p class="intro">This key is available only on this page. Copy it before leaving.</p></div>
 <div class="credential-section credential-reveal" data-key-reveal>
   <p class="credential-notice" role="status">API key created. Existing keys remain active.</p>

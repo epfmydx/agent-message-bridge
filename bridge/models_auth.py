@@ -1,7 +1,7 @@
-"""OAuth credentials are opaque to clients and stored only as SHA-256 hashes."""
+"""Durable OAuth credentials are opaque and stored only as SHA-256 hashes."""
 import hmac
 
-from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, JSON, String
+from sqlalchemy import Boolean, CheckConstraint, Float, ForeignKey, Index, Integer, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .models import Base, now, uid
@@ -15,8 +15,31 @@ class BrowserOwner(Base):
     email: Mapped[str] = mapped_column(String)
     password_hash: Mapped[str] = mapped_column(String)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
-    __table_args__ = (Index("uq_browser_owners_active_email", "email", unique=True,
+    role: Mapped[str] = mapped_column(String, default="owner", server_default="owner")
+    __table_args__ = (CheckConstraint("role IN ('admin', 'owner')"), Index("uq_browser_owners_active_email", "email", unique=True,
                            postgresql_where=active.is_(True), sqlite_where=active.is_(True)),)
+
+
+class OwnerInvitation(Base):
+    __tablename__ = "owner_invitations"
+    __table_args__ = (Index("ix_owner_invitations_created_id", "created_at", "id"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=uid)
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    creator_id: Mapped[str] = mapped_column(ForeignKey("browser_owners.id"))
+    redeemer_id: Mapped[str | None] = mapped_column(ForeignKey("browser_owners.id"), nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, default=now)
+    expires_at: Mapped[float] = mapped_column(Float)
+    redeemed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    revoked_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    displayed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class InvitationReveal(Base):
+    """Temporary server-side handoff consumed before one-time display."""
+    __tablename__ = "invitation_reveals"
+    invitation_id: Mapped[str] = mapped_column(ForeignKey("owner_invitations.id"), primary_key=True)
+    code: Mapped[str] = mapped_column(String)
+    expires_at: Mapped[float] = mapped_column(Float, index=True)
 
 
 class LoginRate(Base):
@@ -32,15 +55,12 @@ class LoginRate(Base):
 class User(Base):
     __tablename__ = "oauth_users"
     id: Mapped[str] = mapped_column(ForeignKey("participants.id"), primary_key=True)
-    email: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
-    managed_source: Mapped[str] = mapped_column(String, default="config", server_default="config")
+    email: Mapped[str | None] = mapped_column(String, nullable=True)
+    managed_source: Mapped[str] = mapped_column(String, default="database", server_default="database")
     creation_token_hash: Mapped[str | None] = mapped_column(String, nullable=True)
     password_hash: Mapped[str] = mapped_column(String)
     api_key_hash: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
     credential_generation: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
-    credential_baseline_set: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
-    configured_password_hash: Mapped[str | None] = mapped_column(String, nullable=True)
-    configured_api_key_hash: Mapped[str | None] = mapped_column(String, nullable=True)
     password_source: Mapped[str | None] = mapped_column(String, nullable=True)
     api_key_source: Mapped[str | None] = mapped_column(String, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -140,3 +160,11 @@ class Token(Base):
     def get_scope(self): return self.scope
     def check_client(self, client): return self.client_id == client.client_id
     def is_expired(self): return self.expires_at <= now()
+
+
+class MigrationReceipt(Base):
+    """One committed ownership mapping; contains no credentials or message data."""
+    __tablename__ = "bridge_migrations"
+    name: Mapped[str] = mapped_column(String, primary_key=True)
+    mapping_hash: Mapped[str] = mapped_column(String(64))
+    applied_at: Mapped[float] = mapped_column(Float)

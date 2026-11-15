@@ -1,13 +1,16 @@
 """Bridge-owned conversation, artifact and durable delivery records."""
 import time
+import secrets
 import uuid
 
-from sqlalchemy import BigInteger, Boolean, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, create_engine, text
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
 def now(): return time.time()
 def uid(): return str(uuid.uuid4())
+def address_id(): return "amb_" + secrets.token_urlsafe(24)
+def private_label(): return "bot-" + secrets.token_hex(8)
 
 
 class Base(DeclarativeBase):
@@ -16,17 +19,32 @@ class Base(DeclarativeBase):
 
 class Participant(Base):
     __tablename__ = "participants"
-    id: Mapped[str] = mapped_column(String, primary_key=True)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=address_id)
+    stable_id: Mapped[str] = mapped_column(String, nullable=False, default=private_label)
     name: Mapped[str] = mapped_column(String)
-    managed_source: Mapped[str] = mapped_column(String, default="config", server_default="config")
+    owner_account_id: Mapped[str] = mapped_column(ForeignKey("browser_owners.id"), nullable=False)
+    reachability_policy: Mapped[str] = mapped_column(String, default="own_owner", server_default="own_owner")
+    __table_args__ = (UniqueConstraint("owner_account_id", "stable_id", name="uq_participants_owner_stable"),
+                      CheckConstraint("reachability_policy IN ('own_owner', 'allowlist', 'open')"),
+                      Index("ix_participants_owner_id", "owner_account_id", "id"))
+    managed_source: Mapped[str] = mapped_column(String, default="database", server_default="database")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Only migrated deployment-webhook recipients accept retained NULL generation rows.
+    legacy_webhook: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    deactivated_at: Mapped[float | None] = mapped_column(Float, nullable=True)
     sequence: Mapped[int] = mapped_column(Integer, default=0)
-    # NULL retains the deployment-provided callback for its legacy recipient.
-    # False is an explicit override and must never fall back to that callback.
+    # NULL and false both leave per-profile notifications off.
     webhook_enabled: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     webhook_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     webhook_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     webhook_generation: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+
+
+class BotAllowlist(Base):
+    """Incoming permissions: receiver policy alone decides cross-owner sends."""
+    __tablename__ = "bot_allowlist"
+    receiver_id: Mapped[str] = mapped_column(ForeignKey("participants.id"), primary_key=True)
+    sender_id: Mapped[str] = mapped_column(String, primary_key=True)
 
 
 class Thread(Base):
@@ -85,6 +103,7 @@ class MessageArtifact(Base):
 
 # Browser ordering is independent of the API's durable per-thread sequence.
 BROWSER_INDEXES = (
+    Index("ix_messages_thread_sender", Message.thread_id, Message.sender_id),
     Index("ix_thread_members_participant_thread", Member.participant_id, Member.thread_id),
     Index("ix_messages_created_id", Message.created_at.desc(), Message.id.desc()),
     Index("ix_messages_thread_created_id", Message.thread_id, Message.created_at.desc(), Message.id.desc()),
@@ -125,7 +144,7 @@ class Delivery(Base):
     kind: Mapped[str] = mapped_column(String)
     destination: Mapped[str] = mapped_column(String)
     subscription_id: Mapped[str | None] = mapped_column(ForeignKey("subscriptions.id"), nullable=True)
-    # NULL is generation 1 only for retained legacy bearer webhook deliveries.
+    # A profile notification must carry its explicit generation snapshot.
     webhook_generation: Mapped[int | None] = mapped_column(Integer, nullable=True)
     state: Mapped[str] = mapped_column(String, default="pending", index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)

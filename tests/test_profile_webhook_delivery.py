@@ -22,7 +22,7 @@ def _message(client, app, ident, *, sender="agent-a", recipient="agent-b", needs
     return response.get_json()
 
 
-def _enable(app, participant_id="agent-b", *, url="https://agent-b.example.com/hook", token="synthetic-agent-b-token"):
+def _enable(app, participant_id="agent-b", *, url="https://dots.example.com/hook", token="synthetic-dots-token"):
     with app.extensions["sessions"].begin() as db:
         participant = db.get(Participant, participant_id)
         update_webhook(db, app.config, participant, enabled=True, url=url, token=token,
@@ -34,75 +34,13 @@ def _deliveries(app, message_id):
         return list(db.scalars(select(Delivery).where(Delivery.message_id == message_id).order_by(Delivery.kind)))
 
 
-def test_transport_encodable_token_is_preserved_without_extra_character_policy(bridge_app):
-    token = "synthetic-header-token-\u00e9"
-    _enable(bridge_app, token=token)
-    from bridge.profile_webhooks import callback
-    with bridge_app.extensions["sessions"]() as db:
-        _, stored = callback(bridge_app.config, db.get(Participant, "agent-b"))
-    assert stored == token
-    # Preparing a header does not connect or send a request.
-    from http.client import HTTPConnection
-    connection = HTTPConnection("receiver.example.com")
-    connection.putrequest("POST", "/", skip_host=True, skip_accept_encoding=True)
-    connection.putheader("Authorization", "Bearer " + stored)
-    connection.close()
 
 
-def test_legacy_null_generation_uses_original_configured_callback_and_contract(bridge_app):
-    app, client = bridge_app, bridge_app.test_client()
-    message = _message(client, app, "legacy-profile-webhook", sender="agent-b", recipient="agent-a")
-    with app.extensions["sessions"].begin() as db:
-        delivery = db.scalar(select(Delivery).where(Delivery.message_id == message["message_id"]))
-        assert delivery.kind == "webhook"
-        delivery.webhook_generation = None  # retained v0.1.0 writer row
-
-    requests = []
-    assert deliver_one(app.extensions["sessions"], app.config,
-                       post=lambda url, body, headers: requests.append((url, body, headers)) or (200, b""))
-    assert len(requests) == 1
-    url, body, headers = requests[0]
-    assert url == "https://agent-a.example.com/bridge-hook"
-    assert headers["Authorization"] == "Bearer synthetic-webhook-bearer"
-    from bridge.events import notification
-    with app.extensions["sessions"]() as db:
-        expected = notification(db.get(Message, message["message_id"]))
-    assert json.loads(body) == expected
-    with app.extensions["sessions"]() as db:
-        row = db.scalar(select(Delivery).where(Delivery.message_id == message["message_id"]))
-        assert row.state == "accepted" and row.status == 200
 
 
-def test_legacy_missing_callback_credentials_keeps_delivery_retryable(bridge_app):
-    app, client = bridge_app, bridge_app.test_client()
-    app.config["WEBHOOK_URL"] = ""
-    app.config["WEBHOOK_TOKEN"] = ""
-    message = _message(client, app, "legacy-callback-not-configured", sender="agent-b", recipient="agent-a")
-    sent = []
-    assert deliver_one(app.extensions["sessions"], app.config, post=lambda *args: sent.append(args))
-    row = _deliveries(app, message["message_id"])[0]
-    assert sent == [] and row.state == "retry" and row.reason == "webhook_not_configured"
 
 
-def test_inherited_unchanged_save_keeps_generation_and_existing_queue(bridge_app):
-    app, client = bridge_app, bridge_app.test_client()
-    message = _message(client, app, "legacy-unchanged-save", sender="agent-b", recipient="agent-a")
-    with app.extensions["sessions"].begin() as db:
-        participant = db.get(Participant, "agent-a")
-        assert participant.webhook_enabled is None and participant.webhook_generation == 1
-        changed = update_webhook(db, app.config, participant, enabled=True, url="", token="",
-                                 expected_generation=1)
-        assert changed is False
-        assert participant.webhook_enabled is None and participant.webhook_generation == 1
-        assert db.scalar(select(Delivery).where(Delivery.message_id == message["message_id"])).state == "pending"
-    sent = []
-    assert deliver_one(app.extensions["sessions"], app.config,
-                       post=lambda url, body, headers: sent.append(url) or (200, b""))
-    assert sent == ["https://agent-a.example.com/bridge-hook"]
-    assert _deliveries(app, message["message_id"])[0].state == "accepted"
-
-
-def test_nonlegacy_webhook_is_opt_in_and_only_wakes_for_new_messages(bridge_app):
+def test_profile_webhook_is_opt_in_and_only_wakes_for_new_messages(bridge_app):
     app, client = bridge_app, bridge_app.test_client()
     old_message = _message(client, app, "before-profile-webhook")
     assert _deliveries(app, old_message["message_id"]) == []
@@ -111,10 +49,10 @@ def test_nonlegacy_webhook_is_opt_in_and_only_wakes_for_new_messages(bridge_app)
     with app.extensions["sessions"]() as db:
         participant = db.get(Participant, "agent-b")
         metadata = view_webhook(app.config, participant)
-        assert metadata["state"] == "enabled" and metadata["hostname"] == "agent-b.example.com"
-        assert "synthetic-agent-b-token" not in str(metadata)
-        assert participant.webhook_token != "synthetic-agent-b-token"
-        assert Fernet(app.config["ENCRYPTION_KEY"].encode()).decrypt(participant.webhook_token.encode()).decode() == "synthetic-agent-b-token"
+        assert metadata["state"] == "enabled" and metadata["hostname"] == "dots.example.com"
+        assert "synthetic-dots-token" not in str(metadata)
+        assert participant.webhook_token != "synthetic-dots-token"
+        assert Fernet(app.config["ENCRYPTION_KEY"].encode()).decrypt(participant.webhook_token.encode()).decode() == "synthetic-dots-token"
     new_message = _message(client, app, "after-profile-webhook")
     rows = _deliveries(app, new_message["message_id"])
     assert [(row.kind, row.webhook_generation) for row in rows] == [("webhook", 2)]
@@ -123,8 +61,8 @@ def test_nonlegacy_webhook_is_opt_in_and_only_wakes_for_new_messages(bridge_app)
     sent = []
     assert deliver_one(app.extensions["sessions"], app.config,
                        post=lambda url, body, headers: sent.append((url, body, headers)) or (200, b""))
-    assert sent[0][0] == "https://agent-b.example.com/hook"
-    assert sent[0][2]["Authorization"] == "Bearer synthetic-agent-b-token"
+    assert sent[0][0] == "https://dots.example.com/hook"
+    assert sent[0][2]["Authorization"] == "Bearer synthetic-dots-token"
     assert json.loads(sent[0][1])["data"]["message_id"] == new_message["message_id"]
 
 
@@ -135,10 +73,9 @@ def test_enabled_profile_does_not_queue_webhook_for_closing_message(bridge_app):
     assert _deliveries(app, message["message_id"]) == []
 
 
-def test_explicit_disable_overrides_legacy_fallback_and_mcp_stays_independent(bridge_app):
+def test_profile_disable_keeps_mcp_independent(bridge_app):
     app, client = bridge_app, bridge_app.test_client()
-    # Legacy recipient is configured by deployment, but an explicit off marker
-    # suppresses that route without affecting a synthetic MCP event.
+    # Disabling the profile callback leaves its MCP subscription independent.
     from test_worker import subscription_params
     result = client.post("/mcp", headers={"Authorization": "Bearer " + app.extensions["test_credentials"]["agent-a"]},
         json={"jsonrpc": "2.0", "id": "subscribe", "method": "events/subscribe", "params": subscription_params()}).get_json()
@@ -146,14 +83,14 @@ def test_explicit_disable_overrides_legacy_fallback_and_mcp_stays_independent(br
     with app.extensions["sessions"].begin() as db:
         participant = db.get(Participant, "agent-a")
         update_webhook(db, app.config, participant, enabled=False, expected_generation=1)
-    message = _message(client, app, "disabled-legacy-still-mcp", sender="agent-b", recipient="agent-a")
+    message = _message(client, app, "disabled-profile-still-mcp", sender="agent-b", recipient="agent-a")
     rows = _deliveries(app, message["message_id"])
     assert len(rows) == 1 and rows[0].kind == "mcp"
 
     requests = []
     assert deliver_one(app.extensions["sessions"], app.config,
                        post=lambda url, body, headers: requests.append(url) or (202, b""))
-    assert requests == ["https://agent-b.example.com/events"]
+    assert requests == ["https://dots.example.com/events"]
 
 
 def test_disable_and_replace_fence_queued_and_retry_jobs(bridge_app):
@@ -193,7 +130,7 @@ def test_in_flight_generation_change_cannot_accept_old_delivery_or_lose_new_job(
     new_ids = []
 
     def callback(url, body, headers):
-        assert url == "https://agent-b.example.com/hook"
+        assert url == "https://dots.example.com/hook"
         with app.extensions["sessions"].begin() as db:
             participant = db.get(Participant, "agent-b")
             update_webhook(db, app.config, participant, enabled=True,
@@ -262,7 +199,7 @@ def test_unreadable_encrypted_profile_token_stops_delivery_without_network_or_cr
     app, client = bridge_app, bridge_app.test_client()
     _enable(app)
     message = _message(client, app, "unreadable-profile-token")
-    healthy = _message(client, app, "healthy-legacy-after-unreadable", sender="agent-b", recipient="agent-a")
+    healthy = _message(client, app, "healthy-profile-after-unreadable", sender="agent-b", recipient="agent-a")
     with app.extensions["sessions"].begin() as db:
         db.get(Participant, "agent-b").webhook_token = "not-a-fernet-token"
         # Deterministically process the corrupt row first, then the healthy row.
@@ -279,12 +216,12 @@ def test_unreadable_encrypted_profile_token_stops_delivery_without_network_or_cr
     assert _deliveries(app, healthy["message_id"])[0].state == "accepted"
 
 
-def test_config_sync_preserves_webhook_fields_and_still_revokes_removed_identity(bridge_app):
+def test_admin_sync_preserves_webhook_fields_and_inactive_identity_stays_blocked(bridge_app):
     app, client = bridge_app, bridge_app.test_client()
     _enable(app, "intruder", url="https://intruder.example.com/hook", token="synthetic-intruder-token")
     queued = _message(client, app, "config-removed-profile", recipient="intruder")
     settings = dict(app.config)
-    settings["USERS"] = [user for user in settings["USERS"] if user["id"] != "intruder"]
+
 
     with app.extensions["sessions"].begin() as db:
         intruder = db.get(Participant, "intruder")
@@ -294,7 +231,8 @@ def test_config_sync_preserves_webhook_fields_and_still_revokes_removed_identity
         user = db.get(User, "intruder")
         after = (intruder.webhook_enabled, intruder.webhook_url, intruder.webhook_token, intruder.webhook_generation)
         assert before == after
-        assert intruder.active is False and user.active is False and user.api_key_hash is None
+        assert intruder.active and user.active
+        intruder.active = False
 
     sent = []
     assert deliver_one(app.extensions["sessions"], app.config,
@@ -310,7 +248,7 @@ def test_origin_secret_cannot_be_profile_webhook_token(bridge_app):
         before = (participant.webhook_enabled, participant.webhook_url, participant.webhook_token,
                   participant.webhook_generation)
         with pytest.raises(Invalid, match="dedicated webhook token"):
-            update_webhook(db, app.config, participant, enabled=True, url="https://agent-b.example.com/hook",
+            update_webhook(db, app.config, participant, enabled=True, url="https://dots.example.com/hook",
                            token=app.config["CLOUDFLARE_ORIGIN_SECRET"], expected_generation=1)
         after = (participant.webhook_enabled, participant.webhook_url, participant.webhook_token,
                  participant.webhook_generation)

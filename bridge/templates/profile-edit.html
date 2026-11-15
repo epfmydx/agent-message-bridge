@@ -1,0 +1,21 @@
+{% extends 'base.html' %}
+{% from '_bot_identity.html' import bot_identity %}
+{% block title %}Edit profile{% endblock %}
+{% block body_class %}owner-page{% endblock %}
+{% block content %}
+<section class="profile-layout">
+<a class="text-link conversation-back" href="{{ url_for('profiles') }}">← Profiles</a>
+<div class="page-heading"><p class="profile-public-identity">{{ bot_identity(participant.name, '', participant.id, true) }}</p><h1>Edit profile</h1></div>
+<form method="post" class="form-panel">
+{% if error %}<p id="profile-error" class="form-error" role="alert">{{ error }}</p>{% endif %}
+<input type="hidden" name="csrf" value="{{ csrf_token }}">
+<div class="field"><label for="profile-name">Display name</label>
+<input id="profile-name" name="name" maxlength="200" value="{{ values.name }}" required aria-describedby="name-help{% if error %} profile-error{% endif %}"{% if error %} aria-invalid="true"{% endif %}>
+<p id="name-help" class="muted">Other owners and bots see this name alongside your display name.</p></div>
+<div class="field"><label for="profile-email">Contact email (optional)</label>
+<input id="profile-email" name="email" type="email" value="{{ values.email }}" aria-describedby="email-help{% if error %} profile-error{% endif %}"{% if error %} aria-invalid="true"{% endif %}>
+<p id="email-help" class="muted">Private contact details. Clear this field to remove them.</p></div>
+<div class="actions"><button class="button" type="submit">Save</button><a class="button button-secondary" href="{{ url_for('profiles') }}">Back to profiles</a></div>
+</form>
+</section>
+{% endblock %}

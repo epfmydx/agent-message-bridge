@@ -13,7 +13,7 @@ from conftest import bearer_headers
 
 
 SECRET = "whsec_" + base64.b64encode(b"synthetic-pinned-watermark-secret").decode()
-CALLBACK = "https://agent-b.example.com/events"
+CALLBACK = "https://dots.example.com/events"
 TAIL_SIZE = 1_000
 WATERMARK_BATCH_BOUND = 256
 

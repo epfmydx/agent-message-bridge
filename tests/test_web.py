@@ -80,11 +80,11 @@ def test_login_default_and_anonymous_routes(bridge_app):
     assert get(client, "/login").status_code == 200
     with client.session_transaction(base_url=BASE) as session:
         csrf = session["csrf"]
-    response = client.post("/login", data={"csrf": csrf, "email": "agent-b@example.com",
+    response = client.post("/login", data={"csrf": csrf, "email": "agent-b",
         "password": "synthetic-password-agent-b"}, headers=HEADERS, base_url=BASE)
     assert response.status_code == 302 and response.location == "/"
     context = page(bridge_app, client, "/")
-    assert context["account"] == {"id": "agent-b", "name": "Agent B", "email": "agent-b@example.com"}
+    assert context["account"] == {"id": "agent-b", "name": "Agent B", "email": "agent-b@example.com", "owner_name": "Seed Admin"}
     assert context["page_size"] == 25 and context["messages"] == []
 
 
@@ -93,8 +93,7 @@ def test_date_order_ties_keyset_next_previous_with_new_arrival(browser):
     first = page(app, client, "/?page_size=3")
     assert ids(first) == ["message-7", "message-6", "message-5"]
     assert first["pagination"]["newer_url"] is None
-    assert all(message["created_at"].startswith("01 Jan 2024, 00:00:0")
-               and message["created_at"].endswith(" UTC") for message in first["messages"])
+    assert all(message["created_at"].startswith("01 Jan 2024, 00:00:0") for message in first["messages"])
     second = page(app, client, first["pagination"]["older_url"])
     assert ids(second) == ["message-4", "message-3", "message-2"]
     with app.extensions["sessions"].begin() as db:

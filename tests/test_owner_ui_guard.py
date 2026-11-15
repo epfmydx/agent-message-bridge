@@ -26,11 +26,14 @@ def sign_in(app, client, ident, owner):
 
 
 def seed_owner_ui(app):
-    app.config["BROWSER_OWNERS"] = [{"id": "guard-owner", "name": "Synthetic Owner",
-        "email": "guard-owner@example.com", "password_hash": generate_password_hash("synthetic-password")}]
+    app.config["BROWSER_ADMIN"] = {"id": "guard-owner", "name": "Synthetic Owner",
+        "email": "guard-owner@example.com", "password_hash": generate_password_hash("synthetic-password")}
     with app.extensions["sessions"].begin() as db:
         from bridge.app import bootstrap
         bootstrap(db, app.config)
+        from sqlalchemy import update
+        from bridge.models import Participant
+        db.execute(update(Participant).values(owner_account_id=app.config["BROWSER_ADMIN"]["id"]))
         db.add(Thread(id="guard-thread", created_at=1704067200))
         db.flush()
         db.add_all([Member(thread_id="guard-thread", participant_id=ident)

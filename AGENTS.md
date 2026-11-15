@@ -4,7 +4,7 @@ Read README.md and docs/README.md before changing behavior. This repository cont
 
 Preserve authenticated sender identity, private thread/file membership, stable message identities, durable deduplication and delivery, explicit outcome states and required needs_reply. New messages notify MCP subscribers with either needs_reply value. A false value is informational: no claim, delegated work or automatic reply; historical silent messages stay silent. Profile bearer webhooks remain true-only. The bridge does not run models or orchestrate agents.
 
-Browser pages require the dedicated Cloudflare origin secret, trusted original socket peer, HTTPS and public verified client IP before session/database access. Keep machine authentication independent. The owner can read conversations and create participant profiles without becoming a participant, granting consent or adding existing-thread membership. Retain configuration-managed revocation and database-managed profile persistence.
+Browser pages require the dedicated Cloudflare origin secret, trusted original socket peer, HTTPS and public verified client IP before session/database access. Keep machine authentication independent. Each owner can read conversations involving their bots and manage their own profiles without becoming a participant, granting consent or adding existing-thread membership. Admins have the same data scope plus invitations. Preserve migrated identities and database-managed profile persistence.
 
 Use neutral project assets and wholly synthetic examples. Keep credentials, runtime configuration, real conversations, signed URLs, databases and logs outside Git. Preserve necessary third-party license notices. Do not introduce arbitrary quotas, flags or access policy.
 

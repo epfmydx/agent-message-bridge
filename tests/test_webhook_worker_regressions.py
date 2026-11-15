@@ -24,7 +24,7 @@ def _enable_profile(app):
     with app.extensions["sessions"].begin() as db:
         participant = db.get(Participant, "agent-b")
         update_webhook(db, app.config, participant, enabled=True,
-                       url="https://agent-b.example.com/hook", token="synthetic-agent-b-token",
+                       url="https://dots.example.com/hook", token="synthetic-dots-token",
                        expected_generation=participant.webhook_generation)
 
 
@@ -33,75 +33,42 @@ def _delivery(app, message_id):
         return db.scalar(select(Delivery).where(Delivery.message_id == message_id))
 
 
-@pytest.mark.parametrize("route", ["legacy", "profile"])
-def test_invalid_destination_is_terminal_for_bearer_webhooks(bridge_app, route):
+def test_invalid_destination_is_terminal_for_bearer_webhooks(bridge_app):
     app, client = bridge_app, bridge_app.test_client()
-    if route == "profile":
-        _enable_profile(app)
-        message = _message(client, app, "invalid-profile-destination")
-    else:
-        message = _message(client, app, "invalid-configured-destination",
-                           sender="agent-b", recipient="agent-a")
-
-    calls = []
+    _enable_profile(app)
+    message = _message(client, app, "invalid-profile-destination")
     def invalid_destination(*args):
-        calls.append(args)
         raise CallbackError("invalid_destination")
-
     assert deliver_one(app.extensions["sessions"], app.config, post=invalid_destination)
     item = _delivery(app, message["message_id"])
-    assert len(calls) == 1
-    assert item.state == "terminal" and item.reason == "invalid_destination"
-    assert item.attempts == 1
-    assert deliver_one(app.extensions["sessions"], app.config,
-                       post=lambda *args: pytest.fail("terminal destination was retried")) is False
+    assert item.state == "terminal" and item.reason == "invalid_destination" and item.attempts == 1
+    assert not deliver_one(app.extensions["sessions"], app.config, post=lambda *args: pytest.fail("terminal retried"))
 
 
 @pytest.mark.parametrize("reason", ["connection_failed", "timeout"])
-@pytest.mark.parametrize("route", ["legacy", "profile"])
-def test_transient_transport_errors_remain_retryable_for_bearer_webhooks(bridge_app, route, reason):
+def test_transient_transport_errors_remain_retryable_for_bearer_webhooks(bridge_app, reason):
     app, client = bridge_app, bridge_app.test_client()
-    if route == "profile":
-        _enable_profile(app)
-        message = _message(client, app, "transient-profile-" + reason)
-    else:
-        message = _message(client, app, "transient-configured-" + reason,
-                           sender="agent-b", recipient="agent-a")
-
+    _enable_profile(app)
+    message = _message(client, app, "transient-profile-" + reason)
     def transient(*args):
         raise CallbackError(reason)
-
     assert deliver_one(app.extensions["sessions"], app.config, post=transient)
     item = _delivery(app, message["message_id"])
-    assert item.state == "retry" and item.reason == reason
-    assert item.attempts == 1
+    assert item.state == "retry" and item.reason == reason and item.attempts == 1
 
 
-@pytest.mark.parametrize("route,status,expected", [
-    ("legacy", 200, "accepted"),
-    ("legacy", 204, "terminal"),
-    ("profile", 200, "accepted"),
-    ("profile", 204, "terminal"),
-    ("mcp", 204, "accepted"),
-])
+@pytest.mark.parametrize("route,status,expected", [("webhook",200,"accepted"),("webhook",204,"terminal"),("mcp",204,"accepted")])
 def test_response_success_contract_is_exact_for_bearer_and_2xx_for_mcp(bridge_app, route, status, expected):
     app, client = bridge_app, bridge_app.test_client()
-    if route == "legacy":
-        message = _message(client, app, "response-configured-" + str(status),
-                           sender="agent-b", recipient="agent-a")
+    if route == "webhook":
+        _enable_profile(app)
     else:
-        if route == "profile":
-            _enable_profile(app)
-        else:
-            from test_worker import make_subscription
-            make_subscription(client, app)
-        message = _message(client, app, "response-" + route + "-" + str(status))
-
-    seen = []
-    assert deliver_one(app.extensions["sessions"], app.config,
-                       post=lambda url, body, headers: seen.append((url, json.loads(body))) or (status, b""))
+        from test_worker import make_subscription
+        make_subscription(client, app)
+    message = _message(client, app, "response-" + route + "-" + str(status))
+    assert deliver_one(app.extensions["sessions"], app.config, post=lambda *args: (status, b""))
     item = _delivery(app, message["message_id"])
-    assert len(seen) == 1 and item.state == expected and item.status == status
+    assert item.state == expected and item.status == status
 
 
 def test_candidate_query_ignores_finished_history_and_live_sending_rows_but_finds_due_work(bridge_app):
@@ -130,7 +97,7 @@ def test_candidate_query_ignores_finished_history_and_live_sending_rows_but_find
     sent = []
     assert deliver_one(app.extensions["sessions"], app.config,
                        post=lambda url, body, headers: sent.append(url) or (200, b""))
-    assert sent == ["https://agent-b.example.com/hook"]
+    assert sent == ["https://dots.example.com/hook"]
     candidate_sql, parameters = next((sql, parameters) for sql, parameters in statements
                                      if "limit" in sql.lower() and "order by" in sql.lower())
     with app.extensions["engine"].begin() as connection:
@@ -157,15 +124,15 @@ def test_candidate_query_ignores_finished_history_and_live_sending_rows_but_find
     assert _delivery(app, live_message["message_id"]).state == "sending"
 
 
-def test_expired_legacy_sending_row_reclaims_with_original_future_available_at(bridge_app):
+def test_expired_profile_sending_row_reclaims_with_original_future_available_at(bridge_app):
     app, client = bridge_app, bridge_app.test_client()
-    message = _message(client, app, "expired-legacy-sending-reclaimed",
+    message = _message(client, app, "expired-profile-sending-reclaimed",
                        sender="agent-b", recipient="agent-a")
     with app.extensions["sessions"].begin() as db:
         item = db.scalar(select(Delivery).where(Delivery.message_id == message["message_id"]))
         original_available_at = 4e9
         item.state, item.available_at = "sending", original_available_at
-        item.lease, item.lease_until = "expired-legacy-lease", 0
+        item.lease, item.lease_until = "expired-profile-lease", 0
 
     sent = []
     assert deliver_one(app.extensions["sessions"], app.config,

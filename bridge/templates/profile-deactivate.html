@@ -1,0 +1,18 @@
+{% extends 'base.html' %}
+{% from '_bot_identity.html' import bot_identity %}
+{% block title %}Deactivate bot{% endblock %}
+{% block body_class %}owner-page{% endblock %}
+{% block content %}
+<section class="profile-layout">
+<a class="text-link conversation-back" href="{{ url_for('profiles') }}">← Profiles</a>
+<div class="page-heading"><p class="profile-public-identity">{{ bot_identity(participant.name, '', participant.id, true) }}</p><h1>Deactivate bot</h1><p class="intro">This cannot be undone.</p></div>
+<form method="post" class="form-panel profile-deactivate-form">
+{% if error %}<p id="deactivate-error" class="form-error" role="alert">{{ error }}</p>{% endif %}
+<input type="hidden" name="csrf" value="{{ csrf_token }}">
+<p>This bot will lose access immediately and stop receiving messages and notifications. Its credentials will be revoked. Shared conversations and files will be kept.</p>
+<p class="muted">Its address and chosen ID stay reserved.</p>
+<fieldset class="profile-auth-methods"><legend>Confirm deactivation</legend><label for="confirm"><input id="confirm" type="checkbox" name="confirm" value="deactivate" required{% if error %} aria-describedby="deactivate-error" aria-invalid="true"{% endif %}> I understand this permanently deactivates this bot.</label></fieldset>
+<div class="actions"><button class="button button-danger" type="submit">Permanently deactivate</button><a class="button button-secondary" href="{{ url_for('profiles') }}">Cancel</a></div>
+</form>
+</section>
+{% endblock %}

@@ -3,10 +3,12 @@ import hashlib
 import json
 from datetime import datetime, timezone
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, exists, or_, select
 
 from .errors import Conflict, Invalid, Unavailable
-from .models import Artifact, Delivery, Member, Message, MessageArtifact, Participant, Subscription, Thread, WorkClaim, now, uid
+from .identities import load_identities, message_identity_fields, public_identity
+from .models_auth import BrowserOwner
+from .models import Artifact, BotAllowlist, Delivery, Member, Message, MessageArtifact, Participant, Subscription, Thread, WorkClaim, now, uid
 
 STATUSES = ("received", "working", "completed", "needs_input")
 
@@ -26,6 +28,21 @@ def participant(db, ident, lock=False):
     return row
 
 
+def reachable(sender, recipient):
+    return or_(recipient.owner_account_id == sender.owner_account_id,
+               recipient.reachability_policy == "open",
+               and_(recipient.reachability_policy == "allowlist", exists(select(BotAllowlist.sender_id).where(
+                   BotAllowlist.receiver_id == recipient.id, BotAllowlist.sender_id == sender.id))))
+
+
+def list_participants(db, owner):
+    sender = participant(db, owner)
+    return {"participants": [public_identity(ident, name, owner_name) for ident, name, owner_name in db.execute(
+        select(Participant.id, Participant.name, BrowserOwner.name)
+        .join(BrowserOwner, BrowserOwner.id == Participant.owner_account_id).where(
+        Participant.active.is_(True), Participant.id != owner, reachable(sender, Participant)).order_by(Participant.id))]}
+
+
 def thread_access(db, owner, thread_id, lock=False):
     participant(db, owner)
     thread = db.get(Thread, nonempty(thread_id), with_for_update=lock, populate_existing=True)
@@ -40,9 +57,11 @@ def message_access(db, owner, ident):
     return row
 
 
-def serialize(db, row, attachments=None):
+def serialize(db, row, attachments=None, identities=None):
+    if identities is None: identities = load_identities(db, (row.sender_id, row.recipient_id))
     if attachments is None: attachments = list(db.scalars(select(MessageArtifact.artifact_id).where(MessageArtifact.message_id == row.id).order_by(MessageArtifact.artifact_id)))
     return {"message_id": row.id, "thread_id": row.thread_id, "sender": row.sender_id, "recipient": row.recipient_id,
+            **message_identity_fields(identities[row.sender_id], identities[row.recipient_id]),
             "reply_to": row.reply_to, "text": row.text, "status": row.status, "needs_reply": row.needs_reply,
             "attachment_ids": attachments, "sequence": row.sequence, "created_at": timestamp(row.created_at)}
 
@@ -67,22 +86,53 @@ def send_message(db, settings, owner, params):
     thread_id, reply_to = params.get("thread_id"), params.get("reply_to")
     if thread_id is not None: nonempty(thread_id)
     if reply_to is not None: nonempty(reply_to)
-    # Both sender idempotency and recipient event sequences are serialized.
-    for p in sorted({owner, recipient_id}): participant(db, p, lock=True)
     fingerprint = hashlib.sha256(canonical([recipient_id, thread_id, reply_to, text, status, params["needs_reply"], sorted(attachments)]).encode()).hexdigest()
+    sender = participant(db, owner)
+    exact_retry = exists(select(Message.id).where(Message.id == ident, Message.sender_id == owner,
+                                                 Message.fingerprint == fingerprint))
+    prior_reply = False
+    if thread_id is not None:
+        # Membership and a message in this exact thread grant only reply access.
+        prior_reply = and_(exists(select(Member.thread_id).where(Member.thread_id == thread_id, Member.participant_id == owner)),
+            exists(select(Member.thread_id).where(Member.thread_id == thread_id, Member.participant_id == recipient_id)),
+            exists(select(Message.id).where(Message.thread_id == thread_id, Message.sender_id == recipient_id)))
+    eligible = db.scalar(select(Participant.id).where(Participant.id == recipient_id,
+        Participant.active.is_(True), or_(reachable(sender, Participant), prior_reply, exact_retry)))
+    if eligible is None:
+        raise Unavailable("Recipient is unavailable")
+    # Only eligible recipients enter the sorted lock path. Recheck policy below
+    # after locks, so a concurrent revocation cannot authorize a new send.
+    locked = {}
+    for p in sorted({owner, recipient_id}):
+        row = db.get(Participant, p, with_for_update=True, populate_existing=True)
+        if not row or not row.active:
+            raise Unavailable("Recipient is unavailable" if p == recipient_id else "Participant is unavailable")
+        locked[p] = row
     prior = db.get(Message, ident)
-    if prior:
-        if prior.sender_id != owner or prior.fingerprint != fingerprint: raise Conflict("Message identity has conflicting content")
+    if prior and prior.sender_id == owner and prior.fingerprint == fingerprint:
         return {**serialize(db, prior), "duplicate": True}
-    if thread_id is None:
+    sender, receiver = locked[owner], locked[recipient_id]
+    thread = None
+    if thread_id is not None:
+        try:
+            thread = thread_access(db, owner, thread_id, lock=True)
+        except Unavailable:
+            raise Unavailable("Recipient is unavailable") from None
+        if not db.get(Member, (thread.id, recipient_id)):
+            raise Unavailable("Recipient is unavailable")
+    accepts = db.scalar(select(Participant.id).where(Participant.id == receiver.id, reachable(sender, Participant)))
+    wrote_here = not accepts and thread is not None and db.scalar(select(Message.id).where(
+        Message.thread_id == thread.id, Message.sender_id == recipient_id).limit(1)) is not None
+    if not accepts and not wrote_here:
+        raise Unavailable("Recipient is unavailable")
+    if prior:
+        raise Conflict("Message identity has conflicting content")
+    if thread is None:
         if reply_to is not None: raise Invalid("A reply requires its thread_id")
         thread = Thread(id=uid(), sequence=0)
         db.add(thread)
         db.flush()
         db.add_all([Member(thread_id=thread.id, participant_id=p) for p in (owner, recipient_id)])
-    else:
-        thread = thread_access(db, owner, thread_id, lock=True)
-        if not db.get(Member, (thread.id, recipient_id)): raise Unavailable("Recipient does not share this thread")
     if reply_to:
         reply = message_access(db, owner, reply_to)
         if reply.thread_id != thread.id: raise Invalid("Reply must belong to the same thread")
@@ -111,8 +161,7 @@ def send_message(db, settings, owner, params):
     if row.needs_reply:
         from .profile_webhooks import generation, should_notify
         if should_notify(settings, recipient):
-            kind = "webhook"
-            db.add(Delivery(message_id=row.id, kind=kind, destination=kind+":"+recipient_id,
+            db.add(Delivery(message_id=row.id, kind="webhook", destination="webhook:"+recipient_id,
                             webhook_generation=generation(recipient)))
     db.flush()
     return {**serialize(db, row), "duplicate": False}
@@ -131,13 +180,24 @@ def list_messages(db, owner, params):
                 .where(Message.thread_id == thread.id, Message.sequence > after,
                        Message.sequence <= selected[-1].sequence).order_by(MessageArtifact.artifact_id)):
             attachments[message_id].append(artifact_id)
-    return {"messages": [serialize(db, row, attachments[row.id]) for row in selected], "next_sequence": selected[-1].sequence if len(rows) > batch else None}
+    identities = load_identities(db, {ident for row in selected for ident in (row.sender_id, row.recipient_id)})
+    return {"messages": [serialize(db, row, attachments[row.id], identities) for row in selected], "next_sequence": selected[-1].sequence if len(rows) > batch else None}
 
 
 def list_threads(db, owner):
     participant(db, owner)
-    return {"threads": [{"thread_id": t.id, "created_at": timestamp(t.created_at), "sequence": t.sequence}
-                        for t in db.scalars(select(Thread).join(Member).where(Member.participant_id == owner).order_by(Thread.created_at, Thread.id))]}
+    rows = list(db.scalars(select(Thread).join(Member).where(Member.participant_id == owner).order_by(Thread.created_at, Thread.id)))
+    owned_threads = select(Member.thread_id).where(Member.participant_id == owner)
+    members = {t.id: [] for t in rows}
+    if rows:
+        for thread_id, ident, name, owner_name, deactivated_at in db.execute(
+                select(Member.thread_id, Participant.id, Participant.name, BrowserOwner.name, Participant.deactivated_at)
+                .join(Participant, Participant.id == Member.participant_id)
+                .join(BrowserOwner, BrowserOwner.id == Participant.owner_account_id)
+                .where(Member.thread_id.in_(owned_threads)).order_by(Member.thread_id, Participant.id)):
+            members[thread_id].append(public_identity(ident, name, owner_name, deactivated_at))
+    return {"threads": [{"thread_id": t.id, "created_at": timestamp(t.created_at), "sequence": t.sequence,
+                         "participants": members[t.id]} for t in rows]}
 
 
 def claim_message(db, owner, params):

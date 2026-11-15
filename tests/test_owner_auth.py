@@ -1,4 +1,4 @@
-"""Synthetic browser-owner authentication remains separate from Agent authority."""
+"""Synthetic browser-owner authentication remains separate from Kai authority."""
 import base64
 import hashlib
 import json
@@ -26,10 +26,12 @@ OWNER_PASSWORD = "synthetic-personal-owner-password"
 
 @pytest.fixture
 def owner_app(bridge_app):
-    bridge_app.config["BROWSER_OWNERS"] = [{"id": "personal-owner", "name": "Personal Owner",
-        "email": "personal@example.com", "password_hash": generate_password_hash(OWNER_PASSWORD)}]
+    bridge_app.config["BROWSER_ADMIN"] = {"id": "personal-owner", "name": "Personal Owner",
+        "email": "personal@example.com", "password_hash": generate_password_hash(OWNER_PASSWORD)}
     with bridge_app.extensions["sessions"].begin() as db:
         bootstrap(db, bridge_app.config)
+        from sqlalchemy import update
+        db.execute(update(Participant).values(owner_account_id=bridge_app.config["BROWSER_ADMIN"]["id"]))
 
     @bridge_app.get("/test/browser-identity")
     def identity_probe():
@@ -75,7 +77,7 @@ def oauth_fields(client_id):
 def participant_connection(app):
     client = app.test_client()
     cid = register(client)
-    assert login(client, email="agent-b@example.com", password="synthetic-password-agent-b").status_code == 302
+    assert login(client, email="agent-b", password="synthetic-password-agent-b").status_code == 302
     fields = oauth_fields(cid)
     consent = get(client, "/oauth/authorize", query_string=fields)
     assert consent.status_code == 200
@@ -119,7 +121,7 @@ def test_owner_login_rotates_session_requires_csrf_and_origin(owner_app):
 def test_owner_invalid_login_and_session_markers(owner_app):
     client = owner_app.test_client()
     response = login(client, password="synthetic-wrong-password")
-    assert response.status_code == 200 and b"Email or password is incorrect" in response.data
+    assert response.status_code == 200 and b"Sign-in details are incorrect." in response.data
     assert get(client, "/test/browser-identity").json["identity"] is None
     with owner_app.extensions["sessions"]() as db:
         owner_hash = digest(db.get(BrowserOwner, "personal-owner").password_hash)
@@ -146,21 +148,21 @@ def test_owner_invalid_login_and_session_markers(owner_app):
         assert get(client, "/test/browser-identity").json["identity"] is None
 
 
-def test_owner_rotation_and_removal_leave_agent_credentials_unchanged(owner_app):
-    agent_client, cid, tokens = participant_connection(owner_app)
+def test_owner_rotation_and_removal_leave_kai_credentials_unchanged(owner_app):
+    kai_client, cid, tokens = participant_connection(owner_app)
     client = owner_app.test_client()
     login(client)
     sessions = owner_app.extensions["sessions"]
     with sessions() as db:
         before = [(u.id, u.password_hash, u.api_key_hash, u.active) for u in db.scalars(select(User).order_by(User.id))]
         family_id = db.scalar(select(Token.family))
-    owner_app.config["BROWSER_OWNERS"][0]["password_hash"] = generate_password_hash("synthetic-rotated-owner-password")
+    owner_app.config["BROWSER_ADMIN"]["password_hash"] = generate_password_hash("synthetic-rotated-owner-password")
     with sessions.begin() as db:
         bootstrap(db, owner_app.config)
     assert get(client, "/test/browser-identity").json["identity"] is None
     assert login(client, password="synthetic-rotated-owner-password").status_code == 302
     assert get(client, "/test/browser-identity").json["owner"] is True
-    owner_app.config["BROWSER_OWNERS"] = []
+    owner_app.config["BROWSER_ADMIN"] = None
     with sessions.begin() as db:
         bootstrap(db, owner_app.config)
     assert get(client, "/test/browser-identity").json["identity"] is None
@@ -170,31 +172,31 @@ def test_owner_rotation_and_removal_leave_agent_credentials_unchanged(owner_app)
         assert before == [(u.id, u.password_hash, u.api_key_hash, u.active) for u in db.scalars(select(User).order_by(User.id))]
         assert db.get(Family, family_id).active
         assert not db.scalar(select(Token)).revoked
-    assert get(agent_client, "/oauth/connections").status_code == 200
-    assert agent_client.get("/api/profile", base_url=BASE, headers={"Authorization": "Bearer "+tokens["access_token"]}).json["participant_id"] == "agent-b"
-    refreshed = agent_client.post("/oauth/token", base_url=BASE, data=dict(grant_type="refresh_token",
+    assert get(kai_client, "/oauth/connections").status_code == 200
+    assert kai_client.get("/api/profile", base_url=BASE, headers={"Authorization": "Bearer "+tokens["access_token"]}).json["participant_id"] == "agent-b"
+    refreshed = kai_client.post("/oauth/token", base_url=BASE, data=dict(grant_type="refresh_token",
         client_id=cid, refresh_token=tokens["refresh_token"], resource=BASE+"/mcp"))
     assert refreshed.status_code == 200
 
 
 @pytest.mark.parametrize("remove_first", [False, True])
-def test_owner_replacement_reuses_email_and_preserves_agent_authority(owner_app, remove_first):
-    agent_client, cid, tokens = participant_connection(owner_app)
+def test_owner_replacement_reuses_email_and_preserves_kai_authority(owner_app, remove_first):
+    kai_client, cid, tokens = participant_connection(owner_app)
     client = owner_app.test_client()
     assert login(client).status_code == 302
     sessions = owner_app.extensions["sessions"]
     with sessions() as db:
-        agent_before = [(u.id, u.password_hash, u.api_key_hash, u.active)
+        kai_before = [(u.id, u.password_hash, u.api_key_hash, u.active)
                       for u in db.scalars(select(User).order_by(User.id))]
         family_id = db.scalar(select(Token.family))
     if remove_first:
-        owner_app.config["BROWSER_OWNERS"] = []
+        owner_app.config["BROWSER_ADMIN"] = None
         with sessions.begin() as db:
             bootstrap(db, owner_app.config)
         assert get(client, "/test/browser-identity").json["identity"] is None
     replacement_password = "synthetic-replacement-owner-password"
-    owner_app.config["BROWSER_OWNERS"] = [{"id": "replacement-owner", "name": "Replacement Owner",
-        "email": "personal@example.com", "password_hash": generate_password_hash(replacement_password)}]
+    owner_app.config["BROWSER_ADMIN"] = {"id": "replacement-owner", "name": "Replacement Owner",
+        "email": "personal@example.com", "password_hash": generate_password_hash(replacement_password)}
     validate_settings(owner_app.config)
     with sessions.begin() as db:
         bootstrap(db, owner_app.config)
@@ -207,45 +209,22 @@ def test_owner_replacement_reuses_email_and_preserves_agent_authority(owner_app,
         replacement = db.get(BrowserOwner, "replacement-owner")
         assert not previous.active and replacement.active
         assert previous.email == replacement.email == "personal@example.com"
-        assert agent_before == [(u.id, u.password_hash, u.api_key_hash, u.active)
+        assert kai_before == [(u.id, u.password_hash, u.api_key_hash, u.active)
                               for u in db.scalars(select(User).order_by(User.id))]
         assert db.get(Family, family_id).active
         assert not db.scalar(select(Token)).revoked
-    assert get(agent_client, "/oauth/connections").status_code == 200
-    assert agent_client.get("/api/profile", base_url=BASE,
+    assert get(kai_client, "/oauth/connections").status_code == 200
+    assert kai_client.get("/api/profile", base_url=BASE,
         headers={"Authorization": "Bearer "+tokens["access_token"]}).json["participant_id"] == "agent-b"
-    assert agent_client.post("/oauth/token", base_url=BASE, data=dict(grant_type="refresh_token",
+    assert kai_client.post("/oauth/token", base_url=BASE, data=dict(grant_type="refresh_token",
         client_id=cid, refresh_token=tokens["refresh_token"], resource=BASE+"/mcp")).status_code == 200
 
 
-def test_owner_email_swap_preserves_same_id_password_sessions(owner_app):
-    other_password = "synthetic-other-owner-password"
-    first = dict(owner_app.config["BROWSER_OWNERS"][0])
-    second = {"id": "second-owner", "name": "Second Owner", "email": "second@example.com",
-              "password_hash": generate_password_hash(other_password)}
-    owner_app.config["BROWSER_OWNERS"] = [first, second]
-    sessions = owner_app.extensions["sessions"]
-    with sessions.begin() as db:
-        bootstrap(db, owner_app.config)
-    first_client, second_client = owner_app.test_client(), owner_app.test_client()
-    assert login(first_client).status_code == 302
-    assert login(second_client, email="second@example.com", password=other_password).status_code == 302
-    first["email"], second["email"] = second["email"], first["email"]
-    validate_settings(owner_app.config)
-    with sessions.begin() as db:
-        bootstrap(db, owner_app.config)
-    assert get(first_client, "/test/browser-identity").json["identity"] == "personal-owner"
-    assert get(second_client, "/test/browser-identity").json["identity"] == "second-owner"
-    assert login(owner_app.test_client(), email="second@example.com").status_code == 302
-    assert login(owner_app.test_client(), password=other_password).status_code == 302
-    with sessions() as db:
-        assert db.get(BrowserOwner, "personal-owner").email == "second@example.com"
-        assert db.get(BrowserOwner, "second-owner").email == "personal@example.com"
 
 
 def test_owner_database_uniqueness_applies_only_to_active_emails(owner_app):
     sessions = owner_app.extensions["sessions"]
-    password_hash = owner_app.config["BROWSER_OWNERS"][0]["password_hash"]
+    password_hash = owner_app.config["BROWSER_ADMIN"]["password_hash"]
     with sessions.begin() as db:
         db.add(BrowserOwner(id="inactive-owner", name="Inactive Owner", email="personal@example.com",
                             password_hash=password_hash, active=False))
@@ -268,7 +247,7 @@ def test_owner_synchronization_rollback_preserves_previous_session(owner_app):
     client = owner_app.test_client()
     assert login(client).status_code == 302
     settings = dict(owner_app.config)
-    settings["BROWSER_OWNERS"] = [{**settings["BROWSER_OWNERS"][0], "id": "replacement-owner"}]
+    settings["BROWSER_ADMIN"] = {**settings["BROWSER_ADMIN"], "id": "replacement-owner"}
     sessions = owner_app.extensions["sessions"]
     with pytest.raises(RuntimeError, match="synthetic transaction rollback"):
         with sessions.begin() as db:
@@ -283,7 +262,7 @@ def test_owner_synchronization_rollback_preserves_previous_session(owner_app):
         assert db.get(BrowserOwner, "replacement-owner") is None
 
 
-def test_owner_cannot_authorize_or_disconnect_agent(owner_app):
+def test_owner_cannot_authorize_or_disconnect_kai(owner_app):
     _, cid, _ = participant_connection(owner_app)
     client = owner_app.test_client()
     login(client)
@@ -319,55 +298,21 @@ def test_owner_cookie_password_and_hash_have_no_machine_authority(owner_app):
         assert all(not db.scalars(select(model)).all() for model in (Code, Family, Token))
         assert db.get(User, "personal-owner") is None
         assert db.get(Participant, "personal-owner") is None
-    # Supplying an actual Agent bearer retains its own participant identity.
+    # Supplying an actual Kai bearer retains its own participant identity.
     key = owner_app.extensions["test_credentials"]["agent-a"]
     assert client.get("/api/profile", base_url=BASE, headers={"Authorization": "Bearer "+key}).json["participant_id"] == "agent-a"
 
 
 @pytest.mark.parametrize("change", [
-    {"id": "agent-b"}, {"email": "AGENT-B@example.com"}, {"password_hash": ""},
+    {"id": "agent-b"}, {"password_hash": ""},
     {"id": " "}, {"name": ""}, {"email": ""}, {"password_hash": 123},
     {"api_key_hash": "synthetic-key-hash"}, {"api_key_env": "SYNTHETIC_API_KEY"},
     {"service": "synthetic"}, {"mcp": {"token": "synthetic"}},
 ])
 def test_owner_config_rejects_ambiguous_identity_and_machine_fields(owner_app, change):
     settings = dict(owner_app.config)
-    settings["BROWSER_OWNERS"] = [{**owner_app.config["BROWSER_OWNERS"][0], **change}]
+    settings["BROWSER_ADMIN"] = {**owner_app.config["BROWSER_ADMIN"], **change}
     with pytest.raises(ValueError):
         validate_settings(settings)
-
-
-def test_owner_config_duplicates_and_backward_compatibility(owner_app):
-    settings = dict(owner_app.config)
-    original = settings["BROWSER_OWNERS"][0]
-    for duplicate in ({**original, "email": "other@example.com"},
-                      {**original, "id": "other-owner", "email": "PERSONAL@example.com"}):
-        settings["BROWSER_OWNERS"] = [original, duplicate]
-        with pytest.raises(ValueError):
-            validate_settings(settings)
-    settings.pop("BROWSER_OWNERS")
-    validate_settings(settings)
-    assert settings["BROWSER_OWNERS"] == []
-
-
-def test_runtime_owner_password_env_and_optional_owners(owner_app, monkeypatch, tmp_path):
-    config = {"participants": [{"id": "agent-a", "name": "Agent A", "email": "agent-a@example.com",
-        "password_hash_env": "SYNTHETIC_AGENT_A_PASSWORD_HASH"}], "webhook_participant_id": "agent-a"}
-    path = tmp_path/"synthetic-runtime.json"
-    monkeypatch.setenv("BRIDGE_CONFIG", str(path))
-    for setting, env in (("DATABASE_URL", "DATABASE_URL"), ("BASE_URL", "BASE_URL"),
-                         ("SECRET_KEY", "SESSION_SECRET"), ("ENCRYPTION_KEY", "ENCRYPTION_KEY")):
-        monkeypatch.setenv(env, owner_app.config[setting])
-    monkeypatch.setenv("SYNTHETIC_AGENT_A_PASSWORD_HASH", owner_app.config["USERS"][0]["password_hash"])
-    monkeypatch.setenv("SYNTHETIC_OWNER_PASSWORD_HASH", owner_app.config["BROWSER_OWNERS"][0]["password_hash"])
-    path.write_text(json.dumps(config))
-    assert load_settings()["BROWSER_OWNERS"] == []
-    config["owners"] = [{"id": "personal-owner", "name": "Personal Owner", "email": "personal@example.com",
-        "password_hash_env": "SYNTHETIC_OWNER_PASSWORD_HASH"}]
-    path.write_text(json.dumps(config))
-    loaded = load_settings()
-    assert loaded["BROWSER_OWNERS"][0]["password_hash"] == owner_app.config["BROWSER_OWNERS"][0]["password_hash"]
-    config["owners"][0]["api_key_env"] = "SYNTHETIC_IGNORED_API_KEY"
-    path.write_text(json.dumps(config))
-    with pytest.raises(ValueError):
-        load_settings()
+        with owner_app.extensions["sessions"].begin() as db:
+            bootstrap(db, settings)

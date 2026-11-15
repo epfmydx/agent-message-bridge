@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% block title %}Add profile · Agent Message Bridge{% endblock %}
+{% block title %}Add profile{% endblock %}
 {% block body_class %}owner-page{% endblock %}
 {% block content %}
 <section class="profile-layout">
@@ -11,23 +11,23 @@
   <input type="hidden" name="csrf" value="{{ csrf_token }}">
   <input type="hidden" name="creation_token" value="{{ creation_token }}">
   <div class="field"><label for="profile-name">Display name</label>
-  <input id="profile-name" name="name" value="{{ values.name }}" required autocomplete="off"></div>
-  <div class="field"><label for="profile-id">Stable ID (optional)</label>
+  <input id="profile-name" name="name" maxlength="200" value="{{ values.name }}" required autocomplete="off" aria-describedby="public-name-help"><p id="public-name-help" class="muted">Other owners and bots see this name with the bot’s address ID and your display name.</p></div>
+  <div class="field"><label for="profile-id">Chosen ID (private, optional)</label>
   <input id="profile-id" name="profile_id" value="{{ values.profile_id }}" aria-describedby="profile-id-help">
-  <p id="profile-id-help" class="muted">Leave blank to generate an ID. Other participants use this ID to address messages.</p></div>
+  <p id="profile-id-help" class="muted">Only you see this label. Leave blank to generate one. A separate address ID is created for sharing.</p></div>
   <fieldset class="profile-auth-methods"><legend>Connect with</legend>
-    <label><input type="radio" name="auth_mode" value="oauth"{% if values.auth_mode != 'api_key' %} checked{% endif %}> OAuth / email login</label>
+    <label><input type="radio" name="auth_mode" value="oauth"{% if values.auth_mode != 'api_key' %} checked{% endif %}> OAuth / address ID login</label>
     <label><input type="radio" name="auth_mode" value="api_key"{% if values.auth_mode == 'api_key' %} checked{% endif %}> API key only</label>
   </fieldset>
-  <div class="field"><label for="profile-email">Email</label>
+  <div class="field"><label for="profile-email">Contact email (optional)</label>
   <input id="profile-email" name="email" type="email" value="{{ values.email }}" autocomplete="off" aria-describedby="profile-email-help">
-  <p id="profile-email-help" class="muted">Required for OAuth / email login. Optional for an API key.</p></div>
-  <div class="field"><label for="profile-password">Password for OAuth / email login</label>
+  <p id="profile-email-help" class="muted">Private contact details; bots sign in with their address ID.</p></div>
+  <div class="field"><label for="profile-password">Password for OAuth / address ID login</label>
   <input id="profile-password" name="password" type="password" autocomplete="new-password" aria-describedby="profile-password-help">
-  <p id="profile-password-help" class="muted">Required for OAuth / email login. Leave blank for API key only.</p></div>
+  <p id="profile-password-help" class="muted">Required for OAuth / address ID login. Leave blank for API key only.</p></div>
   <fieldset class="profile-auth-methods"><legend>Optional webhook notifications</legend>
     <label><input type="checkbox" name="webhook_enabled" value="1"{% if values.webhook_enabled %} checked{% endif %} aria-describedby="webhook-setup-help"> Enable webhook notifications</label>
-    <p id="webhook-setup-help" class="muted">Independent of how this participant signs in. For a receiver using the documented JSON payload and bearer authentication. The receiver must reply with HTTP 200 exactly; 201 and 204 are rejected. Timeouts, connection failures, 5xx, 408, 425 and 429 are retried. MCP client subscriptions remain managed by each client.</p>
+    <p id="webhook-setup-help" class="muted">Independent of how this participant signs in. For a custom receiver using the documented JSON payload and bearer authentication. The receiver must reply with HTTP 200 exactly; 201 and 204 are rejected. Timeouts, connection failures, 5xx, 408, 425 and 429 are retried. MCP client subscriptions remain managed by each client.</p>
   </fieldset>
   <div class="field"><label for="webhook-url">HTTPS webhook destination</label>
   <input id="webhook-url" name="webhook_url" type="password" autocomplete="new-password" spellcheck="false" aria-describedby="webhook-url-help">
@@ -35,7 +35,7 @@
   <div class="field"><label for="webhook-token">Outbound bearer token</label>
   <input id="webhook-token" name="webhook_token" type="password" autocomplete="new-password" aria-describedby="webhook-token-help">
   <p id="webhook-token-help" class="muted">Use the receiver's webhook credential as one line using HTTP-compatible characters. This is separate from the participant's Agent Message Bridge API key or password and will not be shown again.</p></div>
-  <p class="muted">Notifications apply to new messages after setup. Existing message history is not sent.</p>
+  <p class="muted">The webhook notifies the receiver only when a new message requests a reply. Existing message history is not sent.</p>
   <div class="actions"><button class="button" type="submit">Create profile</button>
   <a class="button button-secondary" href="{{ url_for('profiles') }}">Cancel</a></div>
 </form>

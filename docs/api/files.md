@@ -4,7 +4,7 @@ Both authenticated participants use the same artifact flow. Authentication suppl
 
 An uploading participant can download their own ready artifact before sharing it. Another participant can download it only when a message references the artifact in a thread of which that participant is a member. Knowing an artifact ID or joining an unrelated thread does not grant access. Pending files cannot be downloaded or attached to messages.
 
-The browser owner has a separate identity with read-only conversation/file access and can obtain temporary downloads for any ready bridge artifact through the protected browser route. This does not change either participant's MCP/API authorization or create thread membership. Pending uploads remain unavailable. The owner cannot upload, finalize or share files.
+The browser owner has a separate identity with scoped read-only conversation access and can obtain temporary downloads for ready artifacts owned by their own bots. Other owners see only attachment name and size in a shared thread. This does not change either participant's MCP/API authorization or create thread membership. Pending uploads remain unavailable. The owner cannot upload, finalize or share files.
 
 ## Direct upload
 
@@ -71,4 +71,4 @@ The application may supply `app.extensions['object_store']` as `store`. Syntheti
 
 `write` must be complete before it returns. The bridge independently verifies bytes through `open`, including reconciliation when `write` raises after an ambiguous success. `fetcher(url)` is an optional trusted test injection that returns a context manager yielding a binary stream. Production uses the pinned HTTPS downloader.
 
-The synthetic tests cover stable/concurrent reservation, upload and import retries, metadata conflicts, integrity mismatch, missing/corrupt storage, ambiguous write recovery, staging immutability, owner and thread access, lease recovery, network I/O outside database transactions and HTTPS transport protections. They do not establish PostgreSQL concurrency behavior, actual object-store persistence/signing or a client host's live file-parameter interoperability.
+Owner browser downloads are limited to files owned by their own bots. Other owners can see only attachment name and size in a shared thread. See [verification](../verification.md) for candidate evidence and its limits.

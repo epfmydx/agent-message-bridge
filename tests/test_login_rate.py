@@ -221,13 +221,13 @@ def test_every_login_post_counts_before_csrf_password_checks(bridge_app, monkeyp
     page = client.get("/login", base_url=CANONICAL, headers=origin_headers())
     csrf = re.search(rb'name="csrf" value="([^"]+)"', page.data)[1].decode()
 
-    assert post_login(client, data={"csrf": csrf, "email": "agent-b@example.com",
+    assert post_login(client, data={"csrf": csrf, "email": "agent-b",
                                     "password": "synthetic-password-agent-b"}).status_code == 302
     page = client.get("/login", base_url=CANONICAL, headers=origin_headers())
     csrf = re.search(rb'name="csrf" value="([^"]+)"', page.data)[1].decode()
-    assert post_login(client, data={"csrf": csrf, "email": "agent-b@example.com",
+    assert post_login(client, data={"csrf": csrf, "email": "agent-b",
                                     "password": "synthetic-wrong-password"}).status_code == 200
-    assert post_login(client, data={"csrf": "bad", "email": "agent-b@example.com",
+    assert post_login(client, data={"csrf": "bad", "email": "agent-b",
                                     "password": "synthetic-password-agent-b"}).status_code == 400
     assert len(counter(bridge_app).attempts) == 3
 
@@ -237,8 +237,8 @@ def rate_owner_app(bridge_app):
     from bridge.app import bootstrap
     from werkzeug.security import generate_password_hash
 
-    bridge_app.config["BROWSER_OWNERS"] = [{"id": "personal-owner", "name": "Personal Owner",
-        "email": "personal@example.com", "password_hash": generate_password_hash("synthetic-personal-owner-password")}]
+    bridge_app.config["BROWSER_ADMIN"] = {"id": "personal-owner", "name": "Personal Owner",
+        "email": "personal@example.com", "password_hash": generate_password_hash("synthetic-personal-owner-password")}
     with bridge_app.extensions["sessions"].begin() as db:
         bootstrap(db, bridge_app.config)
     return bridge_app
@@ -256,7 +256,7 @@ def test_owner_participant_and_oauth_browser_logins_are_counted(rate_owner_app, 
 
     participant = rate_owner_app.test_client()
     page = participant.get("/login", base_url=CANONICAL, headers=origin_headers())
-    response = post_login(participant, data={"csrf": csrf_from(page), "email": "agent-b@example.com",
+    response = post_login(participant, data={"csrf": csrf_from(page), "email": "agent-b",
                                              "password": "synthetic-password-agent-b"})
     assert response.status_code == 302
 
@@ -277,7 +277,7 @@ def test_owner_participant_and_oauth_browser_logins_are_counted(rate_owner_app, 
     start = oauth.get("/oauth/authorize", base_url=CANONICAL, headers=origin_headers(), query_string=fields)
     assert start.status_code == 302 and start.location == "/login"
     page = oauth.get("/login", base_url=CANONICAL, headers=origin_headers())
-    response = post_login(oauth, data={"csrf": csrf_from(page), "email": "agent-b@example.com",
+    response = post_login(oauth, data={"csrf": csrf_from(page), "email": "agent-b",
                                        "password": "synthetic-password-agent-b"})
     assert response.status_code == 302 and response.location.startswith("/oauth/authorize?")
     assert len(counter(rate_owner_app).attempts) == 3
@@ -330,7 +330,7 @@ def test_rate_database_failure_returns_sanitized_503_without_password_hash(bridg
         pytest.fail("password verification ran after the limiter database failed")
     monkeypatch.setattr(login_rate, "consume", fail)
     monkeypatch.setattr(auth, "check_password_hash", forbidden_hash)
-    response = post_login(client, data={"csrf": csrf, "email": "agent-b@example.com",
+    response = post_login(client, data={"csrf": csrf, "email": "agent-b",
                                         "password": "synthetic-password-agent-b"})
     assert response.status_code == 503 and response.headers["Retry-After"] == "10"
     assert response.json == {"error": "login_temporarily_unavailable"}
@@ -428,7 +428,7 @@ def test_missing_counter_table_fails_real_post_before_hash_and_machine_get_survi
     def forbidden_hash(*args, **kwargs):
         pytest.fail("password verification ran while the counter table was missing")
     monkeypatch.setattr(auth, "check_password_hash", forbidden_hash)
-    response = post_login(client, data={"csrf": csrf, "email": "agent-b@example.com",
+    response = post_login(client, data={"csrf": csrf, "email": "agent-b",
                                         "password": "synthetic-password-agent-b"})
     assert response.status_code == 503
     assert response.headers["Retry-After"] == "10"
@@ -502,7 +502,7 @@ def test_postgres_locked_counter_returns_503_without_password_hash(bridge_app, m
         pytest.fail("password verification ran after the locked limiter row timed out")
     monkeypatch.setattr(auth, "check_password_hash", forbidden_hash)
     try:
-        response = post_login(client, data={"csrf": csrf, "email": "agent-b@example.com",
+        response = post_login(client, data={"csrf": csrf, "email": "agent-b",
                                             "password": "synthetic-password-agent-b"})
     finally:
         lock_transaction.rollback()

@@ -1,22 +1,25 @@
 """Owner-managed participant provisioning; credentials remain outside sessions."""
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime
 
 from flask import abort, current_app, g, make_response, redirect, render_template, request, session, url_for
 from itsdangerous import BadData, URLSafeSerializer
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.exc import IntegrityError
 from werkzeug.security import generate_password_hash
 
 from .auth import browser_owner, browser_user, check_csrf, csrf, digest
 from .errors import Conflict, Invalid
-from .models import Participant, uid
+from .models import BotAllowlist, Participant, address_id, private_label, uid
 from .models_auth import APIKey, BrowserOwner, User
 from .profile_webhooks import update_webhook, view_webhook
+from .profile_validation import display_name, contact_email
 
+
+MAX_ALLOWLIST_ENTRIES = 500
 
 def lock_profile_changes(db):
-    """Serialize cross-table identity checks with configuration synchronization."""
+    """Serialize cross-table identity checks with registration/admin sync."""
     if db.bind.dialect.name == "postgresql":
         db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended("
                         "current_database() || ':' || current_schema() || :purpose, 0))"),
@@ -27,29 +30,6 @@ def lock_profile_changes(db):
         if not connection.connection.driver_connection.in_transaction:
             connection.exec_driver_sql("BEGIN IMMEDIATE")
 
-
-def validate_config_identities(db, settings):
-    """Reject config takeover before modifying any profile or credential."""
-    configured = settings["USERS"] + settings.get("BROWSER_OWNERS", [])
-    ids = [item["id"] for item in configured]
-    emails = [item["email"].casefold() for item in configured]
-    if len(ids) != len(set(ids)) or len(emails) != len(set(emails)):
-        raise ValueError("Configured identities must be unique")
-    participants = {p.id: p for p in db.scalars(select(Participant))}
-    users = list(db.scalars(select(User)))
-    owners = list(db.scalars(select(BrowserOwner)))
-    for item in settings["USERS"]:
-        profile = participants.get(item["id"])
-        if ((profile and profile.managed_source != "config")
-                or any(u.id == item["id"] and u.managed_source != "config" for u in users)
-                or any(o.id == item["id"] for o in owners)
-                or any(u.id != item["id"] and u.email is not None
-                       and u.email.casefold() == item["email"].casefold() for u in users)):
-            raise ValueError("Configured identity conflicts with an existing profile")
-    for item in settings.get("BROWSER_OWNERS", []):
-        if item["id"] in participants or any(u.email is not None and
-                u.email.casefold() == item["email"].casefold() for u in users):
-            raise ValueError("Configured owner conflicts with an existing profile")
 
 
 def _owner():
@@ -91,6 +71,155 @@ def _webhook_enabled():
 
 
 def install_profiles(app):
+    @app.route("/account", methods=["GET", "POST"])
+    def owner_account():
+        owner = _owner()
+        if not owner:
+            return redirect(url_for("login"))
+        if request.args:
+            abort(400)
+        error = None
+        name = owner.name
+        if request.method == "POST":
+            check_csrf()
+            if set(request.form) - {"csrf", "name"} or any(len(request.form.getlist(k)) != 1 for k in request.form):
+                abort(400)
+            name = request.form.get("name", "")
+            try:
+                name = display_name(name)
+            except Invalid as exc:
+                error = str(exc)
+            if not error:
+                lock_profile_changes(g.db)
+                owner = _owner()
+                if not owner:
+                    return redirect(url_for("login"))
+                owner.name = name
+                return redirect(url_for("owner_account"), code=303)
+        return render_template("account.html", name=name, error=error, csrf_token=csrf()), 400 if error else 200
+
+    def owned_profile(owner, *, lock=False):
+        if set(request.args) != {"profile_id"} or len(request.args.getlist("profile_id")) != 1:
+            abort(400)
+        statement = select(Participant).where(Participant.id == request.args["profile_id"],
+            Participant.owner_account_id == owner.id)
+        if lock:
+            statement = statement.with_for_update().execution_options(populate_existing=True)
+        participant = g.db.scalar(statement)
+        if not participant:
+            abort(404)
+        return participant
+
+    @app.route("/profiles/edit", methods=["GET", "POST"])
+    def profile_edit():
+        owner = _owner()
+        if not owner:
+            return redirect(url_for("login"))
+        if request.method == "POST":
+            check_csrf()
+            if set(request.form) - {"csrf", "name", "email"} or any(len(request.form.getlist(k)) != 1 for k in request.form):
+                abort(400)
+            lock_profile_changes(g.db)
+            if not _owner():
+                return redirect(url_for("login"))
+        participant = owned_profile(owner, lock=request.method == "POST")
+        user = g.db.get(User, participant.id)
+        if not participant.active or participant.deactivated_at is not None or not user or not user.active:
+            abort(404)
+        error = None
+        values = dict(name=participant.name, email=user.email or "")
+        if request.method == "POST":
+            values = {key: request.form.get(key, "") for key in ("name", "email")}
+            try:
+                name, email = display_name(values["name"]), contact_email(values["email"])
+            except Invalid as exc:
+                error = str(exc)
+            if not error:
+                participant.name, user.email = name, email
+                return redirect(url_for("profile_edit", profile_id=participant.id), code=303)
+        return render_template("profile-edit.html", participant=participant, values=values,
+                               error=error, csrf_token=csrf()), 400 if error else 200
+
+    @app.route("/profiles/deactivate", methods=["GET", "POST"])
+    def profile_deactivate():
+        from .lifecycle import deactivate_bot, delivery_fence
+        owner = _owner()
+        if not owner:
+            return redirect(url_for("login"))
+        if request.method == "POST":
+            check_csrf()
+            if set(request.form) - {"csrf", "confirm"} or any(len(request.form.getlist(k)) != 1 for k in request.form):
+                abort(400)
+        participant = owned_profile(owner)
+        if not participant.active or participant.deactivated_at is not None:
+            abort(404)
+        error = None
+        if request.method == "POST":
+            if request.form.get("confirm") != "deactivate":
+                error = "Confirm that you want to permanently deactivate this bot."
+            else:
+                # Fence before profile and participant locks, and retain it
+                # through commit. No transport can start after retirement.
+                with delivery_fence(g.db, participant.id):
+                    lock_profile_changes(g.db)
+                    if not _owner():
+                        return redirect(url_for("login"))
+                    deactivate_bot(g.db, owner.id, participant.id)
+                    g.db.commit()
+                return redirect(url_for("profiles"), code=303)
+        return render_template("profile-deactivate.html", participant=participant,
+                               error=error, csrf_token=csrf()), 400 if error else 200
+
+    @app.route("/profiles/reachability", methods=["GET", "POST"])
+    def profile_reachability():
+        owner = _owner()
+        if not owner:
+            return redirect(url_for("login"))
+        if set(request.args) != {"profile_id"} or len(request.args.getlist("profile_id")) != 1:
+            abort(400)
+        if request.method == "POST":
+            check_csrf()
+            if (set(request.form) - {"csrf", "policy", "sender_ids"}
+                    or any(len(request.form.getlist(k)) != 1 for k in request.form)):
+                abort(400)
+            lock_profile_changes(g.db)
+            if not _owner():
+                return redirect(url_for("login"))
+        query = select(Participant).where(Participant.id == request.args["profile_id"],
+                                         Participant.owner_account_id == owner.id, Participant.active.is_(True))
+        participant = g.db.scalar(query.with_for_update() if request.method == "POST" else query)
+        if not participant:
+            abort(404)
+        error = None
+        policy = participant.reachability_policy
+        submitted_ids = None
+        sender_ids = list(g.db.scalars(select(BotAllowlist.sender_id).where(
+            BotAllowlist.receiver_id == participant.id).order_by(BotAllowlist.sender_id)))
+        if request.method == "POST":
+            policy = request.form.get("policy", "")
+            submitted_ids = request.form.get("sender_ids", "\n".join(sender_ids))
+            senders = {ident.strip(" ") for ident in submitted_ids.replace("\r\n", "\n").split("\n") if ident.strip(" ")} if policy == "allowlist" else set()
+            if policy not in ("own_owner", "allowlist", "open"):
+                error = "Choose who can message this bot."
+            elif len(senders) > MAX_ALLOWLIST_ENTRIES:
+                error = "Use at most 500 address IDs."
+            elif any(not ident or ident != ident.strip() or any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in ident) for ident in senders):
+                error = "Enter one routing address per line, without control characters."
+            else:
+                owned = set(g.db.scalars(select(Participant.id).where(
+                    Participant.owner_account_id == owner.id, Participant.id.in_(senders)))) if senders else set()
+                if owned:
+                    error = "Use address IDs of bots owned by someone else."
+            if not error:
+                participant.reachability_policy = policy
+                if policy == "allowlist":
+                    g.db.execute(delete(BotAllowlist).where(BotAllowlist.receiver_id == participant.id))
+                    g.db.add_all([BotAllowlist(receiver_id=participant.id, sender_id=ident) for ident in sorted(senders)])
+                return redirect(url_for("profile_reachability", profile_id=participant.id), code=303)
+        return render_template("profile-reachability.html", participant=participant, policy=policy,
+                               sender_text=submitted_ids if error else "\n".join(sender_ids),
+                               error=error, csrf_token=csrf()), 400 if error else 200
+
     @app.route("/profiles/credentials", methods=["GET", "POST"])
     def profile_credentials():
         from .credentials import credential_view, create_api_key, reset_password, revoke_api_key
@@ -135,7 +264,7 @@ def install_profiles(app):
                 return redirect(url_for("login"))
         participant = g.db.get(Participant, profile_id)
         user = g.db.get(User, profile_id)
-        if not participant or not participant.active or not user or not user.active:
+        if not participant or participant.owner_account_id != owner.id or not participant.active or not user or not user.active:
             abort(404)
         if request.method == "POST":
             try:
@@ -151,7 +280,7 @@ def install_profiles(app):
                         revoke_api_key(g.db, user, key_id, generation, operation_token)
                 g.db.commit()
             except Invalid:
-                error = ("Enter matching new passwords. Email login requires an existing email address."
+                error = ("Enter matching new passwords."
                          if action == "reset_password" else "This API key is no longer available. Review the current keys.")
                 status = 400
             except Conflict:
@@ -164,9 +293,10 @@ def install_profiles(app):
                 session["profile_credential_notice"] = dict(profile=profile_id, action=action)
                 return redirect(url_for("profile_credentials", profile_id=profile_id), code=303)
         view = credential_view(g.db, user)
+        from .web import UTC
         for key in view["keys"]:
             if key["created_at"] is not None:
-                key["created_at"] = datetime.fromtimestamp(key["created_at"], timezone.utc).strftime("%d %b %Y, %H:%M:%S UTC")
+                key["created_at"] = datetime.fromtimestamp(key["created_at"], UTC).strftime("%d %b %Y, %H:%M:%S UTC")
         notice = session.pop("profile_credential_notice", None) if request.method == "GET" else None
         if not isinstance(notice, dict) or notice.get("profile") != profile_id:
             notice = None
@@ -188,7 +318,7 @@ def install_profiles(app):
         if any(len(request.args.getlist(key)) != 1 for key in request.args):
             abort(400)
         size = _page_size()
-        statement = select(Participant, User).join(User, Participant.id == User.id)
+        statement = select(Participant, User).join(User, Participant.id == User.id).where(Participant.owner_account_id == owner.id)
         if "cursor" in request.args:
             try:
                 data = _signer().loads(request.args["cursor"])
@@ -210,7 +340,7 @@ def install_profiles(app):
                          for participant, _ in rows}
         api_profiles = set(g.db.scalars(select(APIKey.owner_id).where(
             APIKey.owner_id.in_([participant.id for participant, _ in rows]), APIKey.active.is_(True)))) if rows else set()
-        return render_template("profiles.html", rows=rows, next_url=next_url,
+        return _credential_response("profiles.html", rows=rows, next_url=next_url,
                                notifications=notifications, api_profiles=api_profiles)
 
     @app.route("/profiles/notifications", methods=["GET", "POST"])
@@ -238,12 +368,12 @@ def install_profiles(app):
             lock_profile_changes(g.db)
             if not _owner():
                 return redirect(url_for("login"))
-        statement = select(Participant).where(Participant.id == profile_id)
+        statement = select(Participant).where(Participant.id == profile_id, Participant.owner_account_id == owner.id)
         if request.method == "POST":
             statement = statement.with_for_update()
         participant = g.db.scalar(statement)
         user = g.db.get(User, profile_id)
-        if not participant or not participant.active or not user or not user.active:
+        if not participant or participant.owner_account_id != owner.id or not participant.active or not user or not user.active:
             abort(404)
         if request.method == "POST":
             try:
@@ -253,7 +383,7 @@ def install_profiles(app):
                                    token=request.form.get("webhook_token", ""),
                                    expected_generation=generation)
             except Invalid:
-                error = "Enter a public HTTPS destination and a single-line bearer token using HTTP-compatible characters. A new destination requires a new token."
+                error = "Enter a public HTTPS destination and a single-line bearer token using HTTP-compatible characters. When changing the destination, enter that receiver’s bearer token."
                 status = 400
             except Conflict:
                 error = "These settings changed since this form was opened. Review the current status before saving again."
@@ -292,16 +422,17 @@ def install_profiles(app):
             if any(len(request.form.getlist(key)) != 1 for key in request.form):
                 abort(400)
             values["webhook_enabled"] = _webhook_enabled()
-            name, ident = values["name"].strip(), values["profile_id"].strip()
-            email = values["email"].strip().casefold() or None
+            chosen_id = values["profile_id"].strip()
+            try:
+                name, email = display_name(values["name"]), contact_email(values["email"])
+            except Invalid as exc:
+                error = str(exc)
             mode = values["auth_mode"]
             password = request.form.get("password", "")
-            if not name:
-                error = "Enter a display name."
-            elif mode not in ("oauth", "api_key"):
+            if not error and mode not in ("oauth", "api_key"):
                 error = "Choose an authentication method."
-            elif mode == "oauth" and (not email or not password):
-                error = "Email and password are required for OAuth / email login."
+            elif not error and mode == "oauth" and not password:
+                error = "Enter a password for address ID login."
             if not error:
                 lock_profile_changes(g.db)
                 if not _owner():
@@ -309,23 +440,18 @@ def install_profiles(app):
                 token_hash = digest(creation_token)
                 if g.db.scalar(select(User.id).where(User.creation_token_hash == token_hash)):
                     error = "This form has already created a profile. Open Profiles to continue."
-                elif ident and (g.db.get(Participant, ident) or g.db.get(BrowserOwner, ident)
-                                or any(item["id"] == ident for field in ("USERS", "BROWSER_OWNERS")
-                                       for item in current_app.config.get(field, []))):
-                    error = "That stable ID is already in use."
-                elif email and (any(u.email and u.email.casefold() == email for u in g.db.scalars(select(User)))
-                                or any(o.active and o.email.casefold() == email for o in g.db.scalars(select(BrowserOwner)))
-                                or any(item["email"].casefold() == email for field in ("USERS", "BROWSER_OWNERS")
-                                       for item in current_app.config.get(field, []))):
-                    error = "That email is already in use."
+                elif chosen_id and g.db.scalar(select(Participant.id).where(
+                        Participant.owner_account_id == owner.id, Participant.stable_id == chosen_id)):
+                    error = "That chosen ID is already used by one of your bots."
                 else:
-                    ident = ident or uid()
+                    ident = address_id()
+                    chosen_id = chosen_id or private_label()
                     raw_key = secrets.token_urlsafe(48) if mode == "api_key" else None
                     # The savepoint includes both records and the durable replay
                     # marker. A duplicate race cannot leave a partial profile.
                     try:
                         with g.db.begin_nested():
-                            participant = Participant(id=ident, name=name, managed_source="database",
+                            participant = Participant(id=ident, stable_id=chosen_id, name=name, owner_account_id=owner.id, managed_source="database",
                                                       webhook_enabled=False)
                             g.db.add(participant)
                             g.db.flush()
@@ -340,13 +466,13 @@ def install_profiles(app):
                                                token=request.form.get("webhook_token", ""),
                                                expected_generation=1)
                     except IntegrityError:
-                        error = "That ID, email or form has already been used. Open a new form or choose different details."
+                        error = "This form or chosen ID has already been used. Open a new form."
                     except (Invalid, Conflict):
                         error = "Enter a public HTTPS destination and a single-line bearer token using HTTP-compatible characters to enable webhook notifications."
                     else:
                         # Commit before exposing the key. Failure cannot render
                         # success or persist a raw credential in a cookie.
                         g.db.commit()
-                        return render_template("profiles-created.html", profile_id=ident, name=name, api_key=raw_key)
+                        return _credential_response("profiles-created.html", participant=participant, profile_id=ident, name=name, api_key=raw_key)
         return render_template("profiles-new.html", values=values, error=error,
                                creation_token=creation_token, csrf_token=csrf()), 400 if error else 200

@@ -48,8 +48,8 @@ def test_unreadable_secret_does_not_block_healthy_destination(bridge_app, field,
     assert worker.deliver_one(app.extensions["sessions"], app.config, post)
     with app.extensions["sessions"]() as db:
         mcp = db.scalar(select(Delivery).where(Delivery.kind == "mcp"))
-        agent_a = db.scalar(select(Delivery).where(Delivery.kind == "webhook"))
-        assert agent_a.state == "accepted"
+        grok = db.scalar(select(Delivery).where(Delivery.kind == "webhook"))
+        assert grok.state == "accepted"
         assert mcp.state == ("stopped" if field == "secret" else "accepted")
         if field == "secret":
             assert mcp.reason == "secret_unreadable" and mcp.lease is None and mcp.lease_until is None
@@ -250,7 +250,7 @@ def test_store_constructed_once_per_process_and_missing_config_is_lazy(bridge_ap
     for i in range(2):
         assert client.post("/api/files/uploads", headers=auth(app, "agent-a"), json=upload_params(idempotency_key=str(i))).status_code == 200
     assert len(constructed) == 1
-    cache = app.extensions["s3_store_cache"]
+    cache = app.extensions["spaces_store_cache"]
     cache.states = {-1: next(iter(cache.states.values()))}
     assert client.post("/api/files/uploads", headers=auth(app, "agent-a"), json=upload_params(idempotency_key="fork")).status_code == 200
     assert len(constructed) == 2
@@ -258,15 +258,16 @@ def test_store_constructed_once_per_process_and_missing_config_is_lazy(bridge_ap
 
 def test_login_miss_and_known_account_both_pay_configured_hash_costs(bridge_app, monkeypatch):
     import bridge.auth as auth_module
+    from bridge.models_auth import User
     from bridge.app import bootstrap, create_app
     from test_web import BASE, HEADERS
     from werkzeug.security import generate_password_hash
     import re
     settings = {key: bridge_app.config[key] for key in bridge_app.config if key.isupper()}
-    settings["USERS"] = [dict(u) for u in settings["USERS"]]
-    settings["USERS"][0]["password_hash"] = generate_password_hash("synthetic-other-password", method="pbkdf2:sha256:1000")
+
     app = create_app(settings)
-    with app.extensions["sessions"].begin() as db: bootstrap(db, settings)
+    with app.extensions["sessions"].begin() as db:
+        db.get(User, "agent-a").password_hash = generate_password_hash("synthetic-other-password", method="pbkdf2:sha256:1000")
     original, observed = auth_module.check_password_hash, []
     def check(value, password):
         observed.append(value.split("$", 1)[0])
@@ -274,11 +275,11 @@ def test_login_miss_and_known_account_both_pay_configured_hash_costs(bridge_app,
     monkeypatch.setattr(auth_module, "check_password_hash", check)
     client = app.test_client()
     counts = []
-    for email in ("agent-a@example.com", "agent-b@example.com", "missing@example.com"):
+    for email in ("agent-a", "agent-b", "missing@example.com"):
         csrf = re.search(rb'name="csrf" value="([^"]+)"', client.get("/login", base_url=BASE, headers=HEADERS).data)[1].decode()
         observed.clear()
         response = client.post("/login", base_url=BASE, headers=HEADERS, data={"csrf": csrf, "email": email, "password": "wrong"})
-        assert response.status_code == 200 and b"Email or password is incorrect." in response.data
+        assert response.status_code == 200 and b"Sign-in details are incorrect." in response.data
         counts.append(sorted(observed))
     assert counts[0] == counts[1] == counts[2] and len(counts[0]) == 2
     app.extensions["engine"].dispose()

@@ -106,7 +106,7 @@ def install_login_limiter(app):
 
     @app.before_request
     def limit_login():
-        if request.method != "POST" or request.path != "/login":
+        if request.method != "POST" or request.path not in ("/login", "/register"):
             return
         # Parse the port separately; normalize wire IDNA names and IP literals
         # exactly as the configured origin, including an absolute trailing dot.

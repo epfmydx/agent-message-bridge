@@ -34,10 +34,12 @@ def hidden(response, name):
 
 @pytest.fixture
 def profile_app(bridge_app):
-    bridge_app.config["BROWSER_OWNERS"] = [dict(id="profile-owner", name="Synthetic Owner",
-        email="owner@example.com", password_hash=generate_password_hash("synthetic-owner-password"))]
+    bridge_app.config["BROWSER_ADMIN"] = dict(id="profile-owner", name="Synthetic Owner",
+        email="owner@example.com", password_hash=generate_password_hash("synthetic-owner-password"))
     with bridge_app.extensions["sessions"].begin() as db:
         bootstrap(db, bridge_app.config)
+        from sqlalchemy import update
+        db.execute(update(Participant).values(owner_account_id=bridge_app.config["BROWSER_ADMIN"]["id"]))
     return bridge_app
 
 
@@ -50,6 +52,17 @@ def sign_in(app, ident="profile-owner", kind="owner"):
         browser.update(owner=ident, account_kind=kind, credential=credential)
         browser.permanent = True
     return client
+
+
+
+def created_id(app, chosen_id, owner="profile-owner"):
+    """Resolve owner-private test labels; real callers use generated addresses."""
+    with app.extensions["sessions"]() as db:
+        row = db.get(Participant, chosen_id)
+        if row:
+            return row.id
+        return db.scalar(select(Participant.id).where(Participant.owner_account_id == owner,
+                                                     Participant.stable_id == chosen_id)) or chosen_id
 
 
 def form(client, **fields):
@@ -77,13 +90,13 @@ def test_api_key_once_atomic_identity_and_replay(profile_app):
         assert raw not in str(dict(browser))
         assert "profile_form" not in browser
     with profile_app.extensions["sessions"]() as db:
-        user = db.get(User, "new-participant")
+        user = db.get(User, created_id(profile_app, "new-participant"))
         assert user.email is None and user.password_hash == ""
         assert user.api_key_hash == digest(raw) and user.managed_source == "database"
         assert db.get(Participant, user.id).managed_source == "database"
         assert not list(db.scalars(select(Member).where(Member.participant_id == user.id)))
     bearer = profile_app.test_client().get("/api/profile", headers={"Authorization": "Bearer "+raw}, base_url=BASE)
-    assert bearer.status_code == 200 and bearer.json["participant_id"] == "new-participant"
+    assert bearer.status_code == 200 and bearer.json["participant_id"] == created_id(profile_app, "new-participant")
     assert post(client, "/profiles/new", data=data).status_code == 400
     listing = get(client, "/profiles")
     assert raw.encode() not in listing.data and b"None" not in listing.data
@@ -113,28 +126,25 @@ def test_csrf_session_revocation_and_untrusted_fields(profile_app):
     response = post(client, "/profiles/new", data={**data, "managed_source": "config", "active": "false", "owner": "true"})
     assert response.status_code == 200
     with profile_app.extensions["sessions"].begin() as db:
-        assert db.get(User, "new-participant").managed_source == "database"
+        assert db.get(User, created_id(profile_app, "new-participant")).managed_source == "database"
         assert not db.get(BrowserOwner, "new-participant")
         db.get(BrowserOwner, "profile-owner").password_hash = "rotated-synthetic-hash"
     assert get(client, "/profiles").status_code == 302
 
 
 @pytest.mark.parametrize("fields,error", [
-    ({"profile_id": "agent-b"}, b"stable ID"),
-    ({"profile_id": "profile-owner"}, b"stable ID"),
-    ({"email": "AGENT-B@EXAMPLE.COM"}, b"email is already"),
-    ({"email": "OWNER@EXAMPLE.COM"}, b"email is already"),
+    ({"profile_id": "agent-b"}, b"chosen ID"),
+    ({"email": "invalid-contact"}, b"valid contact email"),
     ({"name": " "}, b"display name"),
-    ({"auth_mode": "oauth", "email": "", "password": "synthetic-password-secret"}, b"Email and password"),
-    ({"auth_mode": "oauth", "email": "new@example.com", "password": ""}, b"Email and password"),
+    ({"auth_mode": "oauth", "password": ""}, b"password for address ID"),
 ])
 def test_validation_no_partial_records_or_password_echo(profile_app, fields, error):
     response = create(sign_in(profile_app), **fields)
     assert response.status_code == 400 and error in response.data
     assert b"synthetic-password-secret" not in response.data
     with profile_app.extensions["sessions"]() as db:
-        assert not db.get(Participant, "new-participant")
-        assert not db.get(User, "new-participant")
+        assert not db.get(Participant, created_id(profile_app, "new-participant"))
+        assert not db.get(User, created_id(profile_app, "new-participant"))
 
 
 def test_oauth_login_consent_and_optional_email(profile_app):
@@ -142,7 +152,7 @@ def test_oauth_login_consent_and_optional_email(profile_app):
     assert create(owner, auth_mode="oauth", email="NEW@EXAMPLE.COM", password="synthetic-new-password").status_code == 200
     client = profile_app.test_client()
     page = get(client, "/login")
-    assert post(client, "/login", data=dict(csrf=hidden(page, "csrf"), email="new@example.com", password="synthetic-new-password")).status_code == 302
+    assert post(client, "/login", data=dict(csrf=hidden(page, "csrf"), email=created_id(profile_app,"new-participant"), password="synthetic-new-password")).status_code == 302
     registered = client.post("/oauth/register", base_url=BASE, json=dict(redirect_uris=["https://client.example.com/callback"], token_endpoint_auth_method="none"))
     verifier = "v"*64
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
@@ -154,32 +164,25 @@ def test_oauth_login_consent_and_optional_email(profile_app):
     token = client.post("/oauth/token", base_url=BASE, data=dict(grant_type="authorization_code", code=code, client_id=registered.json["client_id"], redirect_uri=fields["redirect_uri"], code_verifier=verifier, resource=BASE+"/mcp"))
     assert token.status_code == 200
     result = client.get("/api/profile", base_url=BASE, headers={"Authorization": "Bearer "+token.json["access_token"]})
-    assert result.json["participant_id"] == "new-participant"
+    assert result.json["participant_id"] == created_id(profile_app, "new-participant")
     assert create(owner, profile_id="email-api", email="OPTIONAL@EXAMPLE.COM").status_code == 200
     assert create(owner, profile_id="no-email-a").status_code == 200
     assert create(owner, profile_id="no-email-b").status_code == 200
     with profile_app.extensions["sessions"]() as db:
-        assert db.get(User, "email-api").email == "optional@example.com"
+        assert db.get(User, created_id(profile_app, "email-api")).email == "optional@example.com"
 
 
-def test_config_durability_revocation_and_takeover_rejection(profile_app):
-    owner = sign_in(profile_app)
-    assert create(owner, email="created@example.com").status_code == 200
-    settings = dict(profile_app.config)
-    settings["USERS"] = [u for u in settings["USERS"] if u["id"] != "intruder"]
+def test_admin_sync_preserves_database_profiles(profile_app):
+    client = sign_in(profile_app)
+    assert create(client, email="created@example.com").status_code == 200
+    for _ in range(2):
+        with profile_app.extensions["sessions"].begin() as db:
+            bootstrap(db, profile_app.config)
+            assert db.get(Participant, created_id(profile_app, "new-participant")).active
+            assert db.get(User, created_id(profile_app, "new-participant")).active
+    settings = dict(profile_app.config, BROWSER_ADMIN=dict(profile_app.config["BROWSER_ADMIN"], email="created@example.com"))
     with profile_app.extensions["sessions"].begin() as db:
-        bootstrap(db, settings)
-        assert db.get(User, "new-participant").active
-        assert db.get(User, "new-participant").api_key_hash
-        assert db.get(Participant, "new-participant").active
-        assert not db.get(User, "intruder").active
-        assert db.get(User, "intruder").api_key_hash is None
-    for replacement in (dict(settings["USERS"][0], id="new-participant"),
-                        dict(settings["USERS"][0], email="CREATED@EXAMPLE.COM")):
-        with pytest.raises(ValueError), profile_app.extensions["sessions"].begin() as db:
-            bootstrap(db, dict(settings, USERS=[replacement]))
-    with pytest.raises(ValueError), profile_app.extensions["sessions"].begin() as db:
-        bootstrap(db, dict(settings, BROWSER_OWNERS=[dict(settings["BROWSER_OWNERS"][0], email="CREATED@EXAMPLE.COM")]))
+        bootstrap(db, settings)  # Contact email is not a bot sign-in identifier.
 
 
 def test_duplicate_submission_race_and_fresh_form_retry(profile_app):
@@ -193,7 +196,7 @@ def test_duplicate_submission_race_and_fresh_form_retry(profile_app):
     with ThreadPoolExecutor(max_workers=2) as pool:
         assert sorted(pool.map(submit, range(2))) == [200, 400]
     with profile_app.extensions["sessions"]() as db:
-        assert len(list(db.scalars(select(User).where(User.managed_source == "database")))) == 1
+        assert len(list(db.scalars(select(User).where(User.creation_token_hash.is_not(None))))) == 1
     assert create(client, profile_id="retry-profile").status_code == 200
 
 
@@ -233,10 +236,10 @@ def test_sqlite_existing_schema_upgrade_retains_foreign_keys_indexes_data_and_ol
         assert db.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
         assert not db.exec_driver_sql("PRAGMA foreign_key_check").all()
         assert db.exec_driver_sql("SELECT owner_id FROM oauth_families").scalar() == "old"
-        assert db.exec_driver_sql("SELECT managed_source FROM oauth_users").scalar() == "config"
+        assert db.exec_driver_sql("SELECT managed_source FROM oauth_users").scalar() == "database"
         db.exec_driver_sql("INSERT INTO participants (id,name,active,sequence) VALUES ('new','New',true,0)")
         db.exec_driver_sql("INSERT INTO oauth_users (id,email,password_hash,active) VALUES ('new',NULL,'',true)")
-        assert db.exec_driver_sql("SELECT managed_source FROM oauth_users WHERE id='new'").scalar() == "config"
+        assert db.exec_driver_sql("SELECT managed_source FROM oauth_users WHERE id='new'").scalar() == "database"
         assert db.exec_driver_sql("SELECT id FROM synthetic_audit").scalar() == "new"
     engine.dispose()
 
@@ -276,23 +279,35 @@ def test_distinct_form_duplicate_race_is_atomic(profile_app, collision):
     def submit(pair):
         return post(pair[0], "/profiles/new", data=pair[1]).status_code
     with ThreadPoolExecutor(max_workers=2) as pool:
-        assert sorted(pool.map(submit, zip(clients, forms))) == [200, 400]
+        assert sorted(pool.map(submit, zip(clients, forms))) == ([200,400] if collision == "id" else [200,200])
     with profile_app.extensions["sessions"]() as db:
-        users = list(db.scalars(select(User).where(User.managed_source == "database")))
-        participants = list(db.scalars(select(Participant).where(Participant.managed_source == "database")))
-        assert len(users) == len(participants) == 1
+        users = list(db.scalars(select(User).where(User.creation_token_hash.is_not(None))))
+        participants = list(db.scalars(select(Participant).where(Participant.id.not_in(["agent-a", "agent-b", "intruder"]))))
+        assert len(users) == len(participants) == (1 if collision == "id" else 2)
 
 
 def test_duplicate_database_failure_rolls_back_both_records(profile_app, monkeypatch):
     import bridge.profiles as profiles
     from sqlalchemy.exc import IntegrityError
-    def interrupted(*args, **kwargs):
-        raise IntegrityError("synthetic duplicate", {}, Exception("synthetic"))
-    monkeypatch.setattr(profiles, "generate_password_hash", interrupted)
-    response = create(sign_in(profile_app), auth_mode="oauth", email="new@example.com", password="synthetic-password")
+    client = sign_in(profile_app)
+    data = form(client)
+    original = profiles.secrets.token_urlsafe
+    duplicate_key = profile_app.extensions["test_credentials"]["agent-b"]
+    errors = []
+    def observed(context):
+        errors.append(context.sqlalchemy_exception)
+    event.listen(profile_app.extensions["engine"], "handle_error", observed)
+    try:
+        monkeypatch.setattr(profiles.secrets, "token_urlsafe", lambda size: duplicate_key if size == 48 else original(size))
+        response = post(client, "/profiles/new", data=data)
+    finally:
+        event.remove(profile_app.extensions["engine"], "handle_error", observed)
     assert response.status_code == 400
+    assert any(isinstance(error, IntegrityError) for error in errors)
+    assert duplicate_key.encode() not in response.data
     with profile_app.extensions["sessions"]() as db:
-        assert not db.get(Participant, "new-participant") and not db.get(User, "new-participant")
+        assert not db.scalar(select(Participant.id).where(Participant.stable_id == "new-participant"))
+        assert not db.scalar(select(User.id).where(User.creation_token_hash == digest(data["creation_token"])))
 
 
 def test_expired_cookie_cannot_provision(profile_app, monkeypatch):
@@ -303,7 +318,7 @@ def test_expired_cookie_cannot_provision(profile_app, monkeypatch):
     monkeypatch.setattr(itsdangerous.timed.time, "time", lambda: real_time() + 9*3600)
     assert post(client, "/profiles/new", data=data).status_code == 302
     with profile_app.extensions["sessions"]() as db:
-        assert not db.get(Participant, "new-participant")
+        assert not db.get(Participant, created_id(profile_app, "new-participant"))
 
 
 def test_new_password_method_and_email_absent_login_have_equal_work(profile_app, monkeypatch):
@@ -319,13 +334,13 @@ def test_new_password_method_and_email_absent_login_have_equal_work(profile_app,
         calls.append(value.split("$", 1)[0])
         return original_check(value, password)
     monkeypatch.setattr(auth, "check_password_hash", check)
-    for email in ("unknown@example.com", "", "new@example.com"):
+    for email in ("unknown@example.com", "", created_id(profile_app,"new-participant")):
         client = profile_app.test_client()
         page = get(client, "/login")
         calls.clear()
         response = post(client, "/login", data=dict(csrf=hidden(page, "csrf"), email=email, password="synthetic-password"))
         assert len(calls) == 2 and set(calls) == {"scrypt:32768:8:1", "pbkdf2:sha256:1000"}
-        assert response.status_code == (302 if email == "new@example.com" else 200)
+        assert response.status_code == (302 if email == created_id(profile_app,"new-participant") else 200)
 
 
 @pytest.mark.parametrize("headers", [
@@ -373,8 +388,8 @@ def test_postgres_existing_upgrade_and_transaction_rollback(profile_app):
     ensure_profile_schema(engine)
     with profile_app.extensions["sessions"]() as db:
         user = db.get(User, "agent-b")
-        assert user.email == "agent-b@example.com" and user.managed_source == "config"
-        assert db.get(Participant, user.id).managed_source == "config"
+        assert user.email == "agent-b@example.com" and user.managed_source == "database"
+        assert db.get(Participant, user.id).managed_source == "database"
     assert next(c for c in inspect(engine).get_columns("oauth_users") if c["name"] == "email")["nullable"]
 
 
@@ -393,7 +408,7 @@ def test_two_open_forms_create_independently_and_replay_never_displays_key(profi
         assert replay.status_code == 400
         assert all(key not in replay.data for key in keys)
     with profile_app.extensions["sessions"]() as db:
-        assert len(list(db.scalars(select(User).where(User.managed_source == "database")))) == 2
+        assert len(list(db.scalars(select(User).where(User.creation_token_hash.is_not(None))))) == 2
 
 
 def test_creation_token_requires_matching_owner_and_valid_csrf(profile_app):
@@ -410,7 +425,7 @@ def test_creation_token_requires_matching_owner_and_valid_csrf(profile_app):
     assert post(sign_in(profile_app, "agent-b", "participant"), "/profiles/new", data=stolen).status_code == 403
     assert post(first, "/profiles/new", data={**stolen, "creation_token": stolen["creation_token"]+"tampered"}).status_code == 400
     with profile_app.extensions["sessions"]() as db:
-        assert not db.get(Participant, "new-participant")
+        assert not db.get(Participant, created_id(profile_app, "new-participant"))
 
 
 @pytest.mark.parametrize("legacy_alter", [0, 1])

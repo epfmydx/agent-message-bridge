@@ -8,7 +8,7 @@ from .network import is_public_unicast
 
 ORIGIN_HEADER = "X-Bridge-Origin"
 BROWSER_ENDPOINTS = frozenset(("inbox", "browser_message", "browser_file", "login", "logout", "authorize", "connections",
-                               "owner_conversation", "owner_conversation_messages", "profiles", "new_profile", "profile_notifications"))
+                               "owner_conversation", "owner_conversation_messages", "profiles", "new_profile", "profile_notifications", "owner_register", "invitations", "invitation_created", "owner_account"))
 
 
 def proxy_networks(value):

@@ -26,7 +26,7 @@ def credential_view(db, user):
     return dict(generation=user.credential_generation,
                 password=dict(configured=bool(user.password_hash),
                               source=user.password_source or user.managed_source,
-                              login_available=bool(user.email)), keys=keys)
+                              login_available=True), keys=keys)
 
 
 def _change(db, user, expected_generation, operation_token):
@@ -45,17 +45,7 @@ def _change(db, user, expected_generation, operation_token):
     token_hash = digest(operation_token)
     if db.get(CredentialOperation, token_hash) or user.credential_generation != expected_generation:
         raise Conflict("Credential form was already used or credentials changed")
-    # Snapshot before the first UI mutation even when a fresh create_all fixture
-    # or an owner-created profile has never run the additive schema upgrade.
-    initialize_baseline(user)
     return user, token_hash
-
-
-def initialize_baseline(user):
-    if not user.credential_baseline_set:
-        user.configured_password_hash = user.password_hash
-        user.configured_api_key_hash = user.api_key_hash
-        user.credential_baseline_set = True
 
 
 def _receipt(db, user, token_hash, purpose, key_id=None):
@@ -70,7 +60,7 @@ def revoke_password_connections(db, user):
 
 
 def revoke_service_keys(db, user):
-    """Explicit config changes supersede all keys for the credential type."""
+    """Deactivate service credentials and their subscriptions."""
     user.api_key_hash = None
     for key_id in db.scalars(select(APIKey.id).where(APIKey.owner_id == user.id)):
         deactivate_subscriptions(db, owner_id=user.id, client_id=service_client(user.id, key_id))
@@ -82,8 +72,6 @@ def reset_password(db, user, password, expected_generation, operation_token):
     if not isinstance(password, str) or not password:
         raise Invalid("Password is required")
     user, token_hash = _change(db, user, expected_generation, operation_token)
-    if not user.email:
-        raise Invalid("Password login requires an existing email")
     user.password_hash = generate_password_hash(password)
     user.password_source = "database"
     revoke_password_connections(db, user)
@@ -95,7 +83,7 @@ def create_api_key(db, user, expected_generation, operation_token):
     raw_key = secrets.token_urlsafe(48)
     key_hash = digest(raw_key)
     # Both stores identify the same bearer namespace. The shared profile lock
-    # serializes this cross-table uniqueness check with config synchronization.
+    # serializes this cross-table uniqueness check with profile changes.
     if (db.scalar(select(User.id).where(User.api_key_hash == key_hash))
             or db.scalar(select(APIKey.id).where(APIKey.key_hash == key_hash))):
         raise Conflict("Credential generation conflicted; open a new form")

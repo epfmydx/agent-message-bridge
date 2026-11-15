@@ -95,27 +95,20 @@ def ensure_delivery_schema(engine):
 
 
 def _profile_columns(connection):
-    """Add provenance with a server default so older writers remain configured."""
+    """Repeatable additions for profiles and their credential operations."""
     for table in ("participants", "oauth_users"):
         names = {c["name"] for c in inspect(connection).get_columns(table)}
         if "managed_source" not in names:
-            connection.exec_driver_sql("ALTER TABLE " + table + " ADD COLUMN managed_source VARCHAR NOT NULL DEFAULT 'config'")
+            connection.exec_driver_sql("ALTER TABLE " + table + " ADD COLUMN managed_source VARCHAR NOT NULL DEFAULT 'database'")
         if table == "oauth_users" and "creation_token_hash" not in names:
             connection.exec_driver_sql("ALTER TABLE oauth_users ADD COLUMN creation_token_hash VARCHAR")
     connection.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS uq_oauth_users_creation_token_hash ON oauth_users (creation_token_hash)")
     names = {c["name"] for c in inspect(connection).get_columns("oauth_users")}
     for name, definition in (
             ("credential_generation", "INTEGER NOT NULL DEFAULT 1"),
-            ("credential_baseline_set", "BOOLEAN NOT NULL DEFAULT false"),
-            ("configured_password_hash", "VARCHAR"), ("configured_api_key_hash", "VARCHAR"),
             ("password_source", "VARCHAR"), ("api_key_source", "VARCHAR")):
         if name not in names:
             connection.exec_driver_sql("ALTER TABLE oauth_users ADD COLUMN " + name + " " + definition)
-    # Only the first upgrade snapshots existing configured credentials. Repeated
-    # initialization must never mistake an owner's current value for config.
-    connection.execute(text("UPDATE oauth_users SET configured_password_hash=password_hash, "
-                            "configured_api_key_hash=api_key_hash, credential_baseline_set=true "
-                            "WHERE managed_source='config' AND credential_baseline_set=false"))
     APIKey.__table__.create(connection, checkfirst=True)
     CredentialOperation.__table__.create(connection, checkfirst=True)
     names = {c["name"] for c in inspect(connection).get_columns("participants")}
@@ -130,19 +123,10 @@ def _profile_columns(connection):
 
 
 def ensure_profile_schema(engine):
-    """Repeatable profile upgrade; nullable emails support API-only identities.
+    """Repeatable additive profile upgrade, retaining nullable API-only emails.
 
-    PostgreSQL changes are transactional and serialized with config/provisioning.
-    SQLite requires a table rebuild to remove NOT NULL. Foreign-key enforcement
-    is disabled only on this dedicated connection before the write transaction;
-    legacy rename mode permits the temporary gap in the referenced table while
-    retaining views and triggers on other tables. Both connection settings are
-    restored afterward. The original definition, indexes and triggers remain,
-    with a foreign-key check before commit. Failure rolls back the entire change.
-    Run init-db before starting this version. Older sync code would deactivate
-    database-managed profiles, so rollback requires preserving these identities.
-    Older credential sync also overwrites UI password changes and ignores added
-    keys: schema retention alone does not make runtime rollback safe after use.
+    Legacy profile-column helpers remain independently testable. Version 0.2.0
+    initialization first checks the fresh-database ownership requirement.
     """
     if engine.dialect.name == "sqlite":
         import re
@@ -200,3 +184,68 @@ def ensure_profile_schema(engine):
                         {"purpose": ":agent-message-bridge-profiles"})
             connection.exec_driver_sql("ALTER TABLE oauth_users ALTER COLUMN email DROP NOT NULL")
         _profile_columns(connection)
+
+
+def ensure_multi_owner_schema(engine):
+    """Add tenancy columns to an empty legacy schema; never guess ownership.
+
+    The 0.2.0 revival uses a fresh database. Nonempty 0.1.x installations need
+    a separately designed migration and fail closed here. Repeated init is safe.
+    """
+    with engine.begin() as connection:
+        if engine.dialect.name == "postgresql":
+            connection.exec_driver_sql("SET LOCAL lock_timeout = '5s'")
+            connection.execute(text("SELECT pg_advisory_xact_lock(hashtextextended("
+                "current_database() || ':' || current_schema() || :purpose, 0))"),
+                {"purpose": ":agent-message-bridge-profiles"})
+        elif engine.dialect.name == "sqlite":
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+        inspector = inspect(connection)
+        if "oauth_users" in inspector.get_table_names():
+            email_unique = any(c["column_names"] == ["email"] for c in inspector.get_unique_constraints("oauth_users"))
+            email_unique = email_unique or any(i.get("unique") and i["column_names"] == ["email"] for i in inspector.get_indexes("oauth_users"))
+            if email_unique:
+                raise RuntimeError("Version 0.2.0 requires a fresh database without legacy bot email uniqueness")
+        columns = {c["name"] for c in inspect(connection).get_columns("participants")}
+        if "owner_account_id" not in columns:
+            if connection.scalar(text("SELECT count(*) FROM participants")):
+                raise RuntimeError("Version 0.2.0 requires a fresh database; legacy ownership cannot be inferred")
+            connection.exec_driver_sql("ALTER TABLE participants ADD COLUMN owner_account_id VARCHAR NOT NULL REFERENCES browser_owners(id)")
+        if "stable_id" not in columns:
+            if connection.scalar(text("SELECT count(*) FROM participants")):
+                raise RuntimeError("Version 0.2.0 requires a fresh database; private bot IDs cannot be inferred")
+            connection.exec_driver_sql("ALTER TABLE participants ADD COLUMN stable_id VARCHAR NOT NULL")
+        inspector = inspect(connection)
+        stable_keys = inspector.get_unique_constraints("participants") + [i for i in inspector.get_indexes("participants") if i.get("unique")]
+        if not any(key["column_names"] == ["owner_account_id", "stable_id"] for key in stable_keys):
+            connection.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS uq_participants_owner_stable ON participants (owner_account_id, stable_id)")
+        if "reachability_policy" not in columns:
+            connection.exec_driver_sql("ALTER TABLE participants ADD COLUMN reachability_policy VARCHAR NOT NULL DEFAULT 'own_owner' CHECK (reachability_policy IN ('own_owner','allowlist','open'))")
+        columns = {c["name"] for c in inspect(connection).get_columns("browser_owners")}
+        if "role" not in columns:
+            if connection.scalar(text("SELECT count(*) FROM browser_owners")):
+                raise RuntimeError("Version 0.2.0 requires a fresh database; legacy owner roles cannot be inferred")
+            connection.exec_driver_sql("ALTER TABLE browser_owners ADD COLUMN role VARCHAR NOT NULL DEFAULT 'owner' CHECK (role IN ('admin','owner'))")
+        from .models import BotAllowlist
+        from .models_auth import InvitationReveal, OwnerInvitation
+        BotAllowlist.__table__.create(connection, checkfirst=True)
+        OwnerInvitation.__table__.create(connection, checkfirst=True)
+        InvitationReveal.__table__.create(connection, checkfirst=True)
+        invitation_columns = {c["name"] for c in inspect(connection).get_columns("owner_invitations")}
+        if "displayed_at" not in invitation_columns:
+            connection.exec_driver_sql("ALTER TABLE owner_invitations ADD COLUMN displayed_at FLOAT")
+        connection.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_participants_owner_id ON participants (owner_account_id, id)")
+
+
+def ensure_deactivation_schema(engine):
+    """Add the nullable retirement marker without backfilling existing rows."""
+    with engine.begin() as connection:
+        if engine.dialect.name == "postgresql":
+            connection.exec_driver_sql("SET LOCAL lock_timeout = '5s'")
+            connection.execute(text("SELECT pg_advisory_xact_lock(hashtextextended("
+                "current_database() || ':' || current_schema() || :purpose, 0))"),
+                {"purpose": ":agent-message-bridge-profiles"})
+        elif engine.dialect.name == "sqlite":
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+        if "deactivated_at" not in {c["name"] for c in inspect(connection).get_columns("participants")}:
+            connection.exec_driver_sql("ALTER TABLE participants ADD COLUMN deactivated_at FLOAT")

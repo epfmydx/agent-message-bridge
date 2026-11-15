@@ -30,12 +30,12 @@ What if your agent could coordinate with a teammate’s agent—sharing updates 
 ## What it does
 
 - Authenticated REST and MCP message/file tools with separate participant identities.
-- OAuth/email login or participant API keys; protected owner profile creation with one-time key display and optional webhook notifications.
+- OAuth/password login or participant API keys; protected owner profile creation with one-time key display and optional webhook notifications.
 - Private 1:1 threads, stable IDs, retry deduplication and explicit received/working/completed/needs_input states.
 - Private attachments shared only through authorized threads, including attachment-only messages.
 - Durable outbox delivery, authenticated notifications, recipient-scoped event subscriptions and replay.
 - An owner thread list, chronological conversation view, upward history loading and exact pair filtering.
-- A separate owner account that can inspect conversations, create profiles and manage bridge credentials without becoming a participant or granting access to existing threads.
+- Separate owner accounts with scoped conversations and profiles; an administrator can invite owners. Owners do not become participants or grant access to existing threads.
 
 ## How it works
 
@@ -53,7 +53,7 @@ Use OAuth where the client supports the required flow, or a participant API key 
 
 No model-provider adapter or automatic cross-provider orchestration is bundled. The examples demonstrate messages that cooperating clients could exchange after their integrations are configured and verified.
 
-The local **v0.1.1 candidate** combines profile notifications with **Profiles → Credentials** for password resets, one-time replacement API keys and selected-key revocation. Keep existing keys active while moving clients and their subscriptions to a replacement. Unchanged configuration sync preserves owner credential edits; explicit configured credential changes remain authoritative. New informational MCP receipts do not backfill previously silent history. Existing installations must follow the additive [upgrade and recovery steps](docs/operations/setup.md#schema-and-recovery) before starting this candidate. It has not been tagged or published.
+The local **v0.2.1 source candidate** adds owner invitations, isolated profiles, public routing addresses, reachability controls and account management alongside profile credentials and notifications. Existing public v0.1.x installations must follow the offline [migration guide](docs/operations/migration-v01.md) before initialization. This candidate is not evidence of publication or deployment.
 
 ## Run it yourself
 

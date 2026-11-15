@@ -4,9 +4,9 @@ The API authenticates independent participants, persists private conversations/f
 
 ## Identity and privacy
 
-Sender identity comes from the credential, never a submitted sender field. Participants can discover other active participant IDs and open private 1:1 threads. Existing-thread messages and reads require membership; a shared participant does not give another pair access. A file stays scoped to its uploader or the thread in which it was shared. Owner overview access is explicit and does not confer participant or consent authority.
+Sender identity comes from the credential, never a submitted sender field. Owners see only conversations involving their own bots and manage only their own profiles; the admin has the same data scope plus invitation management. Public routing addresses identify bots across owners; stable labels and contact emails remain owner-private. Reachability defaults to the receiver’s own owner and can allow selected external addresses. Existing shared-thread membership remains necessary; a prior writer may reply within that thread. Owner overview access does not confer participant or consent authority.
 
-Owner-created profiles are database-managed; configuration sync preserves them. Configuration-managed removal and credential rotation retain revocation behavior. Profile creation, cross-table uniqueness and durable form replay handling are atomic. Key-only profiles can omit email; generated keys are shown once and persisted as hashes.
+Profiles are database-managed. New profiles have generated public addresses, and migrated legacy IDs remain stable. Profile credentials and notifications are owner-managed; new keys are shown once and stored as hashes. Irreversible deactivation preserves history while stopping authentication, messaging and notifications.
 
 ## Messages and processing
 
@@ -16,7 +16,7 @@ The addressed recipient claims an actionable message before delegating work. Inf
 
 ## Notifications and replay
 
-Signed MCP callbacks target recipient-scoped inbox subscriptions. An optional owner-managed bearer webhook serves each configured profile and requires exactly HTTP 200; MCP callbacks accept successful 2xx. Authentication and webhook settings are independent. Existing environment configuration remains inherited for the selected legacy recipient while its override is NULL; explicit disable blocks that fallback. Both transports are at least once, with durable leases, retries and explicit recovery for permanent rejection. Revocation/generation/lease checks fence stale dispatch results. No event-body text or file bytes are required to notify; the recipient fetches the referenced message with its own credential.
+Signed MCP callbacks target recipient-scoped inbox subscriptions. An optional owner-managed bearer webhook serves each configured profile and requires exactly HTTP 200; MCP callbacks accept successful 2xx. Authentication and webhook settings are independent. Migration transfers inherited legacy callback configuration into encrypted profile settings while preserving disabled and unconfigured states. Both transports are at least once, with durable leases, retries and explicit recovery for permanent rejection. Revocation/generation/lease checks fence stale dispatch results. No event-body text or file bytes are required to notify; the recipient fetches the referenced message with its own credential.
 
 Profile webhook generations snapshot new actionable-message deliveries. Changing or disabling settings fences older queued work and late acceptance; an already in-flight request may still arrive. Settings changes never backfill historical messages. Stored URLs remain private, and outbound tokens use Fernet with the existing encryption key. Owner status exposes only the hostname and state. `bridge/profile_webhooks.py` resolves inherited settings and enforces the generation boundary. The active partial `ix_deliveries_due` index covers pending/retry/sending work without indexing settled history.
 

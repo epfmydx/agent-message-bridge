@@ -24,7 +24,35 @@ def main():
     claim = commands.add_parser("release-claim", help="Release a stranded work claim after checking the prior worker outcome")
     claim.add_argument("message_id")
     claim.add_argument("--claim-id", required=True, help="Expected current claim identity; prevents releasing another run")
+    migrate = commands.add_parser("migrate-v01", help="Offline ownership migration for existing public 0.1.x data")
+    migrate.add_argument("--mapping", required=True, help="Protected JSON assigning every bot and selecting the admin")
+    migrate.add_argument("--legacy-config", help="Protected old config; defaults to BRIDGE_CONFIG on first execution")
+    mode = migrate.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--check", action="store_true", help="Read-only preflight; creates no schema or receipt")
+    mode.add_argument("--apply", action="store_true", help="Apply atomically after stopping every old API/worker")
     args = parser.parse_args()
+    if args.command == "migrate-v01":
+        import os
+        from pathlib import Path
+        from .migration import migrate_v01
+        from .models import database
+        from sqlalchemy.engine import make_url
+        try:
+            url = make_url(os.environ["DATABASE_URL"])
+            if url.get_backend_name() == "sqlite" and (not url.database or not Path(url.database).is_file()):
+                raise ValueError("Select an existing SQLite database for migration")
+            mapping = json.loads(Path(args.mapping).read_text())
+            engine, _ = database(url.render_as_string(hide_password=False))
+            try:
+                result = migrate_v01(engine, mapping, legacy_config=args.legacy_config or os.environ.get("BRIDGE_CONFIG"), apply=args.apply)
+            finally:
+                engine.dispose()
+        except (ValueError, KeyError, OSError) as exc:
+            parser.error(str(exc) if isinstance(exc, ValueError) else "Cannot read migration input or database settings")
+        except Exception:
+            parser.error("Migration failed; its transaction was rolled back. Check the supported schema and database availability.")
+        print({"ready": "Migration preflight passed; database unchanged", "applied": "Ownership migration committed", "already_applied": "Ownership migration already applied; database unchanged"}[result])
+        return
     if args.command == "serve":
         # Own Gunicorn image/runtime; preserve configured trusted proxy semantics.
         import os
@@ -37,12 +65,18 @@ def main():
     sessions = app.extensions["sessions"]
     if args.command in ("init-db", "sync-config"):
         if args.command == "init-db":
+            from sqlalchemy import inspect
+            inspector = inspect(app.extensions["engine"])
+            if inspector.has_table("participants") and "owner_account_id" not in {c["name"] for c in inspector.get_columns("participants")}:
+                parser.error("Existing public 0.1.x database requires migrate-v01 with an explicit ownership mapping before init-db")
             from .models_auth import LoginRate
             # This new table has its own serialized, repeatable upgrade path.
             Base.metadata.create_all(app.extensions["engine"], tables=[
                 table for table in Base.metadata.sorted_tables if table is not LoginRate.__table__])
-            from .schema import ensure_browser_indexes, ensure_delivery_schema, ensure_login_rate_schema, ensure_profile_schema
+            from .schema import ensure_multi_owner_schema, ensure_browser_indexes, ensure_delivery_schema, ensure_login_rate_schema, ensure_profile_schema, ensure_deactivation_schema
+            ensure_multi_owner_schema(app.extensions["engine"])
             ensure_profile_schema(app.extensions["engine"])
+            ensure_deactivation_schema(app.extensions["engine"])
             ensure_login_rate_schema(app.extensions["engine"])
             ensure_delivery_schema(app.extensions["engine"])
             ensure_browser_indexes(app.extensions["engine"])

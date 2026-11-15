@@ -10,7 +10,7 @@ from conftest import bearer_headers
 
 
 WEBHOOK_SECRET = "whsec_" + base64.b64encode(b"synthetic-performance-secret-32").decode()
-CALLBACK = "https://agent-b.example.com/events"
+CALLBACK = "https://dots.example.com/events"
 
 
 def subscribe(client, app):

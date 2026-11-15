@@ -13,22 +13,10 @@ from .transport import CallbackError, verify_callback
 
 
 def bootstrap(db, settings):
-    from .auth import bootstrap_browser_owners, bootstrap_users
-    from .profiles import lock_profile_changes, validate_config_identities
+    from .auth import bootstrap_browser_admin
+    from .profiles import lock_profile_changes
     lock_profile_changes(db)
-    validate_config_identities(db, settings)
-    ids = {u["id"] for u in settings["USERS"]}
-    for p in db.scalars(select(Participant).with_for_update()):
-        if p.managed_source == "config" and p.id not in ids: p.active = False
-    for user in settings["USERS"]:
-        p = db.get(Participant, user["id"])
-        if p is None:
-            p = Participant(id=user["id"], sequence=0)
-            db.add(p)
-        p.name, p.active = user["name"], True
-    db.flush()
-    bootstrap_users(db, settings["USERS"])
-    bootstrap_browser_owners(db, settings.get("BROWSER_OWNERS", []))
+    bootstrap_browser_admin(db, settings.get("BROWSER_ADMIN"))
 
 
 def schema(properties=None, required=()):
@@ -86,8 +74,11 @@ def call_tool(app, token, name, args):
     if not spec or not isinstance(args, dict) or set(args)-set(spec["properties"]) or not set(spec["required"]) <= set(args): raise Invalid("Unknown tool or invalid arguments")
     validate_types(args, spec)
     owner, db = token.owner_id, g.db
-    if name == "get_profile": return {"participant_id": owner, "name": messages.participant(db, owner).name}
-    if name == "list_participants": return {"participants": [{"participant_id": p.id, "name": p.name} for p in db.scalars(select(Participant).where(Participant.active.is_(True), Participant.id != owner).order_by(Participant.id))]}
+    if name == "get_profile":
+        from .identities import load_identities
+        messages.participant(db, owner)
+        return load_identities(db, (owner,))[owner]
+    if name == "list_participants": return messages.list_participants(db, owner)
     if name == "list_threads": return messages.list_threads(db, owner)
     if name == "get_message": return messages.get_message(db, owner, args["message_id"])
     if name == "list_messages": return messages.list_messages(db, owner, args)
@@ -122,7 +113,7 @@ def create_app(settings=None):
     @app.before_request
     def begin_request():
         g.db = sessions()
-        if engine.dialect.name == "sqlite" and request.method == "POST": g.db.connection().exec_driver_sql("BEGIN IMMEDIATE")
+        if engine.dialect.name == "sqlite" and request.method == "POST" and request.path not in ("/register", "/profiles/deactivate"): g.db.connection().exec_driver_sql("BEGIN IMMEDIATE")
 
     @app.after_request
     def finish(response):
@@ -157,6 +148,8 @@ def create_app(settings=None):
     install_web(app)
     from .profiles import install_profiles
     install_profiles(app)
+    from .invitations import install_invitations
+    install_invitations(app)
 
     @app.get("/healthz")
     def health():
@@ -184,7 +177,13 @@ def create_app(settings=None):
                 value = call_tool(app, token, params.get("name"), params.get("arguments", {}))
                 result = {"content": [{"type": "text", "text": messages.canonical(value)}], "structuredContent": value, "isError": False}
             elif method == "events/list":
-                result = {"events": [{"name": events.EVENT_NAME, "description": "A message addressed to your participant. Read it by message_id and deduplicate by eventId/message_id. Claim needs_reply=true before authorized work. With needs_reply=false, read as information without claiming or replying automatically. Historical silent messages do not emit events.", "delivery": ["webhook"], "inputSchema": schema(), "payloadSchema": schema({"message_id": STRING, "thread_id": STRING, "sender": STRING, "recipient": STRING, "status": {"type": "string", "enum": list(messages.STATUSES)}, "needs_reply": {"type": "boolean"}}, ("message_id", "thread_id", "sender", "recipient", "status", "needs_reply"))}]}
+                result = {"events": [{"name": events.EVENT_NAME, "description": "A message addressed to your participant. Read it by message_id and deduplicate by eventId/message_id. Claim needs_reply=true before authorized work. With needs_reply=false, read as information without claiming or replying automatically. Historical silent messages do not emit events.", "delivery": ["webhook"], "inputSchema": schema(), "payloadSchema": schema({"message_id": STRING, "thread_id": STRING, "sender": STRING, "recipient": STRING,
+                    "sender_name": {"type": "string"}, "sender_owner_name": {"type": "string"},
+                    "recipient_name": {"type": "string"}, "recipient_owner_name": {"type": "string"},
+                    "sender_deactivated": {"type": "boolean"}, "recipient_deactivated": {"type": "boolean"},
+                    "status": {"type": "string", "enum": list(messages.STATUSES)}, "needs_reply": {"type": "boolean"}},
+                    ("message_id", "thread_id", "sender", "recipient", "sender_name", "sender_owner_name",
+                     "recipient_name", "recipient_owner_name", "status", "needs_reply"))}]}
             elif method == "events/subscribe": result = events.subscribe(g.db, app.config, params, token, app.extensions.get("verify_callback", verify_callback), lambda: bearer(g.db, lock_service=True))
             elif method == "events/unsubscribe": result = events.unsubscribe(g.db, params, token)
             else:

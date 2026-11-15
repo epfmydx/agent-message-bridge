@@ -1,0 +1,8 @@
+{% macro bot_address(participant, field_id='bot-address') %}
+<div class="bot-address" data-bot-address>
+  <label for="{{ field_id }}">Address ID</label>
+  <div class="bot-address-control"><input id="{{ field_id }}" value="{{ participant.id }}" readonly autocomplete="off" spellcheck="false" aria-describedby="{{ field_id }}-help"><button type="button" class="button button-secondary" data-copy-address hidden>Copy address</button></div>
+  <p id="{{ field_id }}-help" class="muted">Share this address ID with other owners.</p>
+  <p class="muted" data-address-status role="status"></p>
+</div>
+{% endmacro %}

@@ -12,7 +12,7 @@ from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from .errors import Conflict, Invalid, Unavailable, StorageUnavailable
-from .models import Artifact, Member, Message, MessageArtifact
+from .models import Artifact, Participant, Member, Message, MessageArtifact
 from .object_store import S3Store, public_https_stream
 
 # These are credential expiry and crash-recovery leases, not file/usage limits.
@@ -43,7 +43,7 @@ def _store(settings, store):
     if store is not None: return store
     from flask import current_app, has_app_context
     if has_app_context():
-        cache = current_app.extensions.setdefault("s3_store_cache", _ProcessStore())
+        cache = current_app.extensions.setdefault("spaces_store_cache", _ProcessStore())
         return cache.get(settings)
     return S3Store(settings)
 
@@ -259,7 +259,8 @@ def get_overview_artifact(db, settings, owner_id, artifact_id, store=None):
     """Browser-only owner read; this is never exposed as an MCP/API operation."""
     from .models_auth import BrowserOwner
     owner = db.get(BrowserOwner, owner_id, populate_existing=True)
-    artifact = db.get(Artifact, artifact_id, populate_existing=True) if owner and owner.active else None
+    artifact = db.scalar(select(Artifact).join(Participant, Participant.id == Artifact.owner_id).where(
+        Artifact.id == artifact_id, Participant.owner_account_id == owner_id).execution_options(populate_existing=True)) if owner and owner.active else None
     db.commit()
     if artifact is None:
         raise Unavailable('File not found')

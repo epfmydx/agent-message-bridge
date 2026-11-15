@@ -1,6 +1,6 @@
 """Read-only owner thread overview and sequence-ordered conversations."""
 import math
-from datetime import datetime, timezone
+from datetime import datetime
 
 from flask import abort, current_app, g, jsonify, make_response, redirect, render_template, request, url_for
 from itsdangerous import BadData, URLSafeSerializer
@@ -8,6 +8,7 @@ from sqlalchemy import and_, case, exists, func, select, tuple_
 from sqlalchemy.orm import aliased
 
 from . import auth
+from .identities import public_identity, label
 from .models import Member, Message, Participant, Thread
 from .models_auth import BrowserOwner
 
@@ -63,14 +64,18 @@ def _html(template, **context):
     return response
 
 
-def _participant_names(thread_ids):
-    names = {ident: [] for ident in thread_ids}
-    if names:
-        for ident, name in g.db.execute(select(Member.thread_id, Participant.name)
+def _participants(thread_ids):
+    from .web import _viewer_owner_id
+    items = {ident: [] for ident in thread_ids}
+    if items:
+        viewer = _viewer_owner_id()
+        for thread, ident, name, owner_name, owner, deactivated_at in g.db.execute(
+                select(Member.thread_id, Participant.id, Participant.name, BrowserOwner.name, Participant.owner_account_id, Participant.deactivated_at)
                 .join(Participant, Participant.id == Member.participant_id)
-                .where(Member.thread_id.in_(names)).order_by(Member.thread_id, Participant.name, Participant.id)):
-            names[ident].append(name)
-    return names
+                .join(BrowserOwner, BrowserOwner.id == Participant.owner_account_id)
+                .where(Member.thread_id.in_(items)).order_by(Member.thread_id, Participant.name, Participant.id)):
+            items[thread].append(dict(public_identity(ident, name, owner_name, deactivated_at), is_own=owner == viewer))
+    return items
 
 
 def _selected_pair():
@@ -83,9 +88,16 @@ def _selected_pair():
             or request.args[keys[0]] == request.args[keys[1]]):
         abort(400, "Choose two different profiles")
     pair = tuple(sorted(request.args[key] for key in keys))
-    found = set(g.db.scalars(select(Participant.id).where(Participant.id.in_(pair))))
-    if found != set(pair):
-        abort(404)
+    from .web import _user, owner_thread_scope
+    user = _user()
+    owned = set(g.db.scalars(select(Participant.id).where(
+        Participant.id.in_(pair), Participant.owner_account_id == user.id)))
+    if len(owned) != 2:
+        # A foreign counterpart is visible only through already shared history;
+        # unrelated existing and unknown IDs have the same unavailable result.
+        if not owned or not g.db.scalar(select(Thread.id).where(
+                _pair_condition(pair), owner_thread_scope(user.id)).limit(1)):
+            abort(404)
     return pair
 
 
@@ -117,7 +129,8 @@ def _messages(rows, *, align=False, pair=None):
             message["alternate"] = row.sender_id != first_sender.get(row.thread_id, row.sender_id)
         message["detail_url"] = url_for("browser_message", message_id=row.id, **_pair_args(pair))
         for artifact in message["attachments"]:
-            artifact["download_url"] = url_for("browser_file", artifact_id=artifact["id"])
+            if artifact["can_download"]:
+                artifact["download_url"] = url_for("browser_file", artifact_id=artifact["id"])
     return serialized
 
 
@@ -129,7 +142,7 @@ def owner_inbox(user):
     message date index. Only page messages, memberships and attachments are
     bulk-loaded, never complete message histories or per-row attachment queries.
     """
-    from .web import _rows
+    from .web import UTC, _rows, owner_thread_scope
     if not isinstance(user, BrowserOwner):
         abort(404)
     size = _arguments(("page_size", "cursor", "participant_a", "participant_b"))
@@ -145,7 +158,7 @@ def owner_inbox(user):
     date = case((final.id.is_not(None), final.created_at), else_=Thread.created_at)
     key = tuple_(active, date, Thread.id)
     statement = select(Thread, final.id, active.label("active"), date.label("sort_date")).outerjoin(
-        final, final.id == final_id).where(_pair_condition(pair))
+        final, final.id == final_id).where(_pair_condition(pair), owner_thread_scope(user.id))
     if anchor is not None:
         statement = statement.where(key > tuple(anchor) if direction == "newer" else key < tuple(anchor))
     columns = (active, date, Thread.id)
@@ -161,14 +174,14 @@ def owner_inbox(user):
     latest = {message["message_id"]: message for message in _messages(
         _rows(g.db, select(Message).where(Message.id.in_(latest_ids))) if latest_ids else [])}
     thread_ids = [row[0].id for row in rows]
-    names = _participant_names(thread_ids)
+    members = _participants(thread_ids)
     first_id = (select(Message.id).where(Message.thread_id == Thread.id)
         .order_by(Message.sequence.asc()).limit(1).correlate(Thread).scalar_subquery())
     first_text = dict(g.db.execute(select(Thread.id, Message.text).join(Message, Message.id == first_id)
         .where(Thread.id.in_(thread_ids))).all()) if thread_ids else {}
-    threads = [{"thread_id": row[0].id, "participant_names": names[row[0].id],
+    threads = [{"thread_id": row[0].id, "participants": members[row[0].id],
         "last_message": latest.get(row[1]), "first_message_text": first_text.get(row[0].id),
-        "created_at": datetime.fromtimestamp(row[0].created_at, timezone.utc).strftime("%d %b %Y, %H:%M:%S UTC"),
+        "created_at": datetime.fromtimestamp(row[0].created_at, UTC).strftime("%d %b %Y, %H:%M:%S UTC"),
         "url": url_for("owner_conversation", thread_id=row[0].id, **pair_args)} for row in rows]
     pagination = {"older_url": None, "newer_url": None}
     if rows:
@@ -183,12 +196,12 @@ def owner_inbox(user):
             else:
                 condition = key < tuple(boundary) if side == "older" else key > tuple(boundary)
                 exists = g.db.scalar(select(Thread.id).outerjoin(final, final.id == final_id)
-                    .where(condition, _pair_condition(pair)).limit(1)) is not None
+                    .where(condition, _pair_condition(pair), owner_thread_scope(user.id)).limit(1)) is not None
             if exists:
                 pagination[side+"_url"] = url_for("inbox", page_size=size, **pair_args,
                     cursor=_cursor(user, "owner-threads", side, boundary, size, pair=pair))
-    profiles = [dict(id=profile.id, name=profile.name, active=profile.active)
-        for profile in g.db.scalars(select(Participant).order_by(Participant.name, Participant.id))]
+    profiles = [dict(id=profile.id, name=profile.name, owner_name=user.name, is_own=True, active=profile.active, label=label(public_identity(profile.id, profile.name, user.name, profile.deactivated_at), own=True))
+        for profile in g.db.scalars(select(Participant).where(Participant.owner_account_id == user.id).order_by(Participant.name, Participant.id))]
     return _html("owner_threads.html", threads=threads, pagination=pagination, page_size=size,
         profiles=profiles, selected_pair=pair, refresh_url=url_for("inbox", page_size=size, **pair_args),
         all_pairs_url=url_for("inbox", page_size=size))
@@ -214,7 +227,7 @@ def _has_messages(thread_id, direction, anchor):
 def install_owner_web(app):
     @app.get("/conversation")
     def owner_conversation():
-        from .web import _rows, _user
+        from .web import _rows, _user, owner_thread_scope
         user = _user()
         if not user:
             return redirect(url_for("login"))
@@ -227,7 +240,7 @@ def install_owner_web(app):
         direction, anchor = None, 0
         if history_page:
             direction, anchor = _read_cursor(request.args["cursor"], user, "owner-conversation", size, thread_id, pair)
-        thread = g.db.get(Thread, thread_id)
+        thread = g.db.scalar(select(Thread).where(Thread.id == thread_id, owner_thread_scope(user.id)))
         if thread is None or (pair and not g.db.scalar(select(Thread.id)
                 .where(Thread.id == thread_id, _pair_condition(pair)))):
             abort(404)
@@ -243,8 +256,9 @@ def install_owner_web(app):
         newer_exists = _has_messages(thread_id, "newer", newest)
         older_url = (_feed_url(user, thread_id, size, "older", oldest, pair)
             if older_exists else None)
+        members = _participants([thread_id])[thread_id]
         return _html("owner_conversation.html", thread={"id": thread_id, "thread_id": thread_id,
-            "participant_names": _participant_names([thread_id])[thread_id]}, messages=_messages(rows, align=True, pair=pair),
+            "participants": members}, messages=_messages(rows, align=True, pair=pair),
             older_url=older_url, newer_url=_feed_url(user, thread_id, size, "newer", newest, pair), page_size=size,
             older_page_url=_page_url(user, thread_id, size, "older", oldest, pair) if older_exists else None,
             newer_page_url=_page_url(user, thread_id, size, "newer", newest, pair) if newer_exists else None,
@@ -252,7 +266,7 @@ def install_owner_web(app):
 
     @app.get("/conversation/messages")
     def owner_conversation_messages():
-        from .web import _rows, _user
+        from .web import _rows, _user, owner_thread_scope
         user = _user()
         if not user:
             return jsonify(error="Authentication required", login_url=url_for("login")), 401
@@ -262,7 +276,7 @@ def install_owner_web(app):
         pair = _selected_pair()
         thread_id = request.args["thread_id"]
         direction, anchor = _read_cursor(request.args["cursor"], user, "owner-conversation", size, thread_id, pair)
-        if g.db.get(Thread, thread_id) is None or (pair and not g.db.scalar(select(Thread.id)
+        if g.db.scalar(select(Thread.id).where(Thread.id == thread_id, owner_thread_scope(user.id))) is None or (pair and not g.db.scalar(select(Thread.id)
                 .where(Thread.id == thread_id, _pair_condition(pair)))):
             abort(404)
         condition = Message.sequence < anchor if direction == "older" else Message.sequence > anchor

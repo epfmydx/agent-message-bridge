@@ -42,79 +42,26 @@ def deactivate_subscriptions(db, **filters):
                .values(active=False, generation=Subscription.generation+1))
 
 
-def bootstrap_users(db, settings_users):
-    """Synchronize configured credentials; caller owns the transaction.
-
-    Unchanged configuration preserves owner-managed credentials. Explicit
-    changes supersede UI changes for that credential type, and profile removal
-    revokes every credential and subscription. The caller owns the transaction.
-    """
-    from .credentials import initialize_baseline, revoke_password_connections, revoke_service_keys
+def bootstrap_browser_admin(db, item):
+    """Only the configured admin is synchronized; registered owners persist."""
     from .profiles import lock_profile_changes
     lock_profile_changes(db)
-    configured = {item["id"] for item in settings_users}
-    for user in db.scalars(select(User)):
-        if user.managed_source == "config" and user.id not in configured:
-            initialize_baseline(user)
-            if user.active:
-                user.credential_generation += 1
-            user.active = False
-            user.password_hash = ""
-            revoke_service_keys(db, user)
-            revoke_password_connections(db, user)
-            deactivate_subscriptions(db, owner_id=user.id)
-    for item in settings_users:
-        user = db.scalar(select(User).where(User.id == item["id"]).with_for_update(key_share=True)
-                         .execution_options(populate_existing=True))
-        password_hash = item["password_hash"]
-        api_key_hash = item.get("api_key_hash") or None
-        if user is None:
-            user = User(id=item["id"], password_hash=password_hash, api_key_hash=api_key_hash,
-                        credential_generation=1, credential_baseline_set=True,
-                        configured_password_hash=password_hash, configured_api_key_hash=api_key_hash,
-                        password_source="config", api_key_source="config")
-            db.add(user)
-        else:
-            if user.managed_source != "config":
-                raise ValueError("Configured identity conflicts with a database-managed profile")
-            initialize_baseline(user)
-            password_changed = not user.active or user.configured_password_hash != password_hash
-            key_changed = not user.active or user.configured_api_key_hash != api_key_hash
-            if password_changed:
-                revoke_password_connections(db, user)
-                user.password_hash, user.password_source = password_hash, "config"
-                user.configured_password_hash = password_hash
-            if key_changed:
-                revoke_service_keys(db, user)
-                user.api_key_hash, user.api_key_source = api_key_hash, "config"
-                user.configured_api_key_hash = api_key_hash
-            if password_changed or key_changed:
-                user.credential_generation += 1
-        if api_key_hash and db.scalar(select(APIKey.id).where(APIKey.key_hash == api_key_hash,
-                                                               APIKey.owner_id != user.id)):
-            raise ValueError("Configured API credential conflicts with an existing profile")
-        user.email = item["email"].casefold()
-        user.active = True
-
-
-def bootstrap_browser_owners(db, settings_owners):
-    """Synchronize browser credentials; caller owns the entire transaction."""
-    owners = {owner.id: owner for owner in db.scalars(
-        select(BrowserOwner).order_by(BrowserOwner.id).with_for_update())}
-    # Release the active-email index entries before applying replacements or
-    # swaps. These intermediate states are never committed separately.
-    for owner in owners.values():
-        owner.active = False
+    owners = list(db.scalars(select(BrowserOwner).order_by(BrowserOwner.id).with_for_update()))
+    if item:
+        if (db.get(Participant, item["id"])
+                or any(o.role != "admin" and (o.id == item["id"] or o.email == item["email"].strip().casefold()) for o in owners)):
+            raise ValueError("Configured admin conflicts with an existing identity")
+    for owner in owners:
+        if owner.role == "admin":
+            owner.active = False
     db.flush()
-    for item in settings_owners:
-        owner = owners.get(item["id"])
+    if item:
+        owner = next((o for o in owners if o.id == item["id"]), None)
         if owner is None:
-            owner = BrowserOwner(id=item["id"])
+            owner = BrowserOwner(id=item["id"], role="admin", name=item["name"])
             db.add(owner)
-        owner.name = item["name"]
-        owner.email = item["email"].casefold()
-        owner.password_hash = item["password_hash"]
-        owner.active = True
+        owner.email = item["email"].strip().casefold()
+        owner.password_hash, owner.active = item["password_hash"], True
 
 
 def authenticated_user(db, owner_id):
@@ -344,8 +291,7 @@ class RefreshGrant(RefreshTokenGrant):
 
 
 def install_auth(app):
-    configured_hashes = [item.get("password_hash", "") for key in ("USERS", "BROWSER_OWNERS")
-                         for item in app.config.get(key, [])]
+    configured_hashes = [(app.config.get("BROWSER_ADMIN") or {}).get("password_hash", "")]
     methods = {value.split("$", 1)[0] for value in configured_hashes if value}
     dummy_password_hashes = {method: generate_password_hash(secrets.token_urlsafe(32), method=method)
                              for method in methods}
@@ -433,7 +379,8 @@ def install_auth(app):
         error = None
         if request.method == "POST":
             check_csrf()
-            email = request.form.get("email", "").casefold()
+            identifier = request.form.get("email", "").strip()
+            email = identifier.casefold()
             # Read the same active account sets for every email. If sync-config
             # added a hash method, dummy preparation must not depend on whether
             # the submitted email exists (including the first such login).
@@ -445,7 +392,7 @@ def install_auth(app):
                     if method not in dummy_password_hashes:
                         dummy_password_hashes[method] = generate_password_hash(secrets.token_urlsafe(32), method=method)
             owner = next((account for account in owners if account.email == email), None)
-            user = owner or next((account for account in users if account.email == email), None)
+            user = owner or next((account for account in users if account.id == identifier), None)
             actual_hash = user.password_hash if user and user.password_hash else ""
             actual_method = actual_hash.split("$", 1)[0]
             valid = False
@@ -467,8 +414,9 @@ def install_auth(app):
                 session["account_kind"] = "owner" if owner else "participant"
                 session.permanent = True
                 return redirect(target)
-            error = "Email or password is incorrect."
-        return render_template("login.html", csrf_token=csrf(), error=error, email=request.form.get("email", ""))
+            error = "Sign-in details are incorrect."
+        return render_template("login.html", csrf_token=csrf(), error=error, email=request.form.get("email", ""),
+                               registration_complete=session.pop("registration_complete", False))
 
     @app.post("/logout")
     def logout():

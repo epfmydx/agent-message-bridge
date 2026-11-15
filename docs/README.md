@@ -5,7 +5,8 @@
 - [Authentication](api/authentication.md): OAuth, participant key handover/revocation, owner credential controls and login protection.
 - [Browser interface](api/browser.md): conversations, pair filters, profile credentials/notifications and history navigation.
 - [Files](api/files.md): private uploads, imports, downloads and recovery.
-- [Setup](operations/setup.md): private config, initialization, API/worker and rollback.
+- [Setup](operations/setup.md): private config, initialization and API/worker startup.
+- [Migration from v0.1.x](operations/migration-v01.md): offline ownership mapping, preflight and recovery.
 - [Browser origin protection](operations/cloudflare.md): required Cloudflare/trusted-proxy path.
 - [Source releases](operations/releases.md): version checks and tag-only source validation.
 - [Interface assets](ui-assets.md): neutral local presentation and accessibility.

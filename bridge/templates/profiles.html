@@ -1,5 +1,7 @@
+{% from '_bot_identity.html' import bot_identity %}
 {% extends 'base.html' %}
-{% block title %}Profiles · Agent Message Bridge{% endblock %}
+{% from '_bot_address.html' import bot_address %}
+{% block title %}Profiles{% endblock %}
 {% block body_class %}owner-page{% endblock %}
 {% block content %}
 <div class="owner-list-heading"><div>
@@ -10,17 +12,23 @@
 <div class="connection-list profile-list">
 {% for participant, user in rows %}
 <section class="connection-row" aria-labelledby="profile-{{ loop.index }}">
-  <div><h2 id="profile-{{ loop.index }}">{{ participant.name }}</h2>
-  <p>Stable ID: <code class="profile-id">{{ participant.id }}</code></p>
+  <div><h2 id="profile-{{ loop.index }}">{{ bot_identity(participant.name, '', participant.id, true, participant.deactivated_at is not none) }}</h2>
+  <p>Chosen ID: <code class="profile-id">{{ participant.stable_id }}</code> <span class="muted">· Private</span></p>
+  {% if participant.deactivated_at is none %}{{ bot_address(participant, 'address-' ~ loop.index) }}{% endif %}
   {% if user.email %}<p>{{ user.email }}</p>{% endif %}
-  <p class="muted">{{ 'Active' if participant.active and user.active else 'Inactive' }} · {{ 'Configuration' if participant.managed_source == 'config' else 'Owner-created' }}{% if user.password_hash %} · OAuth / email login{% endif %}{% if user.api_key_hash or participant.id in api_profiles %} · API key{% endif %}</p>
+  <p class="muted">{{ 'Deactivated' if participant.deactivated_at is not none else 'Active' if participant.active and user.active else 'Inactive' }}{% if user.password_hash %} · OAuth / address ID login{% endif %}{% if user.api_key_hash or participant.id in api_profiles %} · API key{% endif %}</p>
   {% set notification = notifications[participant.id] %}
-  <p class="muted">Webhook: {{ {'inherited': 'Inherited legacy configuration', 'enabled': 'Configured', 'disabled': 'Disabled', 'unconfigured': 'Unconfigured'}[notification.state] }}{% if notification.state == 'inherited' and not notification.configured %} (unconfigured){% endif %}{% if notification.hostname %} · {{ notification.hostname }}{% endif %}</p></div>
+  <p class="muted">Webhook: {{ {'enabled': 'Configured', 'disabled': 'Disabled'}[notification.state] }}{% if notification.hostname %} · {{ notification.hostname }}{% endif %}</p></div>
   {% if participant.active and user.active %}<div class="actions profile-actions">
+  <a class="button button-secondary" href="{{ url_for('profile_edit', profile_id=participant.id) }}" aria-label="Edit {{ participant.name }}">Edit</a>
+  <a class="button button-secondary" href="{{ url_for('profile_reachability', profile_id=participant.id) }}">Reachability</a>
   <a class="button button-secondary" href="{{ url_for('profile_credentials', profile_id=participant.id) }}" aria-label="Credentials for {{ participant.name }}">Credentials</a>
-  <a class="button button-secondary" href="{{ url_for('profile_notifications', profile_id=participant.id) }}" aria-label="Notifications for {{ participant.name }}">Notifications</a></div>{% endif %}
+  <a class="button button-secondary" href="{{ url_for('profile_notifications', profile_id=participant.id) }}" aria-label="Notifications for {{ participant.name }}">Notifications</a>
+  <a class="button button-danger" href="{{ url_for('profile_deactivate', profile_id=participant.id) }}" aria-label="Deactivate {{ participant.name }}">Deactivate</a></div>{% endif %}
 </section>
 {% else %}<div class="empty-state"><h2>No profiles</h2><p>Add a profile to create a participant identity.</p></div>{% endfor %}
 </div>
 {% if next_url %}<nav class="pagination" aria-label="Profile pages"><a class="button button-secondary" href="{{ next_url }}">More profiles →</a></nav>{% endif %}
 {% endblock %}
+
+{% block scripts %}<script src="{{ url_for('static', filename='profile-address.js') }}" defer></script>{% endblock %}

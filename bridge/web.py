@@ -1,7 +1,7 @@
 """Read-only browser views for a participant or the independent bridge owner."""
 import json
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from flask import abort, current_app, g, redirect, render_template, request, url_for
 from itsdangerous import BadData, URLSafeSerializer
@@ -9,8 +9,12 @@ from sqlalchemy import exists, select, true, tuple_
 from sqlalchemy.orm import aliased
 
 from . import auth, files
+from .identities import public_identity, message_identity_fields, label
 from .models import Artifact, Member, Message, MessageArtifact, Participant, Thread
 from .models_auth import BrowserOwner
+
+UTC = timezone.utc
+
 
 def _page_size():
     """Keep browser rendering and attachment bind lists bounded per request."""
@@ -35,7 +39,14 @@ def _scope(owner):
 
 
 def _visibility(user):
-    return true() if isinstance(user, BrowserOwner) else _scope(user.id)
+    if isinstance(user, BrowserOwner):
+        return owner_thread_scope(user.id, Message.thread_id)
+    return _scope(user.id)
+
+
+def owner_thread_scope(owner_id, thread_column=Thread.id):
+    return exists(select(Member.thread_id).join(Participant, Participant.id == Member.participant_id).where(
+        Member.thread_id == thread_column, Participant.owner_account_id == owner_id))
 
 
 def _cursor_identity(user):
@@ -69,28 +80,47 @@ def _read_cursor(value, owner, page_size):
         abort(400, "Invalid page cursor")
 
 
+def _viewer_owner_id():
+    user = _user()
+    return user.id if isinstance(user, BrowserOwner) else g.db.get(Participant, user.id).owner_account_id
+
+
 def _rows(db, statement):
     sender, recipient = aliased(Participant), aliased(Participant)
-    return db.execute(statement.add_columns(sender.name, recipient.name)
-                      .join(sender, sender.id == Message.sender_id)
-                      .join(recipient, recipient.id == Message.recipient_id)).all()
+    sender_owner, recipient_owner = aliased(BrowserOwner), aliased(BrowserOwner)
+    viewer = _viewer_owner_id()
+    rows = db.execute(statement.add_columns(sender.name, recipient.name, sender_owner.name,
+        recipient_owner.name, sender.owner_account_id, recipient.owner_account_id, sender.deactivated_at, recipient.deactivated_at)
+        .join(sender, sender.id == Message.sender_id).join(recipient, recipient.id == Message.recipient_id)
+        .join(sender_owner, sender_owner.id == sender.owner_account_id)
+        .join(recipient_owner, recipient_owner.id == recipient.owner_account_id)).all()
+    return [(row, dict(public_identity(row.sender_id, sender, sender_owner, sender_deactivated), is_own=sender_id == viewer),
+             dict(public_identity(row.recipient_id, recipient, recipient_owner, recipient_deactivated), is_own=recipient_id == viewer))
+            for row, sender, recipient, sender_owner, recipient_owner, sender_id, recipient_id, sender_deactivated, recipient_deactivated in rows]
 
 
 def _serialize(db, rows):
     attachments = {row.id: [] for row, _, _ in rows}
     if rows:
         # Fetch all attachment metadata once per page, including empty messages.
-        for message_id, artifact in db.execute(select(MessageArtifact.message_id, Artifact)
+        user = _user()
+        uploader = aliased(Participant)
+        for message_id, artifact, owner_account_id in db.execute(select(MessageArtifact.message_id, Artifact, uploader.owner_account_id)
                 .join(Artifact, Artifact.id == MessageArtifact.artifact_id)
+                .join(uploader, uploader.id == Artifact.owner_id)
                 .where(MessageArtifact.message_id.in_(attachments))
                 .order_by(MessageArtifact.message_id, Artifact.id)):
             attachments[message_id].append({"id": artifact.id, "filename": artifact.filename,
-                "size_bytes": artifact.size_bytes, "content_type": artifact.content_type})
+                "size_bytes": artifact.size_bytes,
+                "can_download": not isinstance(user, BrowserOwner) or owner_account_id == user.id,
+                "content_type": artifact.content_type if not isinstance(user, BrowserOwner) or owner_account_id == user.id else None})
     return [{"message_id": row.id, "thread_id": row.thread_id, "sender": row.sender_id,
-             "sender_name": sender, "recipient": row.recipient_id, "recipient_name": recipient,
+             **message_identity_fields(sender, recipient), "sender_is_own": sender["is_own"],
+             "sender_label": label(sender, own=sender["is_own"]),
+             "recipient": row.recipient_id, "recipient_is_own": recipient["is_own"],
              "reply_to": row.reply_to, "text": row.text, "status": row.status,
              "needs_reply": row.needs_reply,
-             "created_at": datetime.fromtimestamp(row.created_at, timezone.utc).strftime("%d %b %Y, %H:%M:%S UTC"),
+             "created_at": datetime.fromtimestamp(row.created_at, UTC).strftime("%d %b %Y, %H:%M:%S UTC"),
              "attachments": attachments[row.id]} for row, sender, recipient in rows]
 
 
@@ -103,10 +133,11 @@ def install_web(app):
         account = None
         if user:
             if isinstance(user, BrowserOwner):
-                account = {"id": user.id, "name": user.name, "email": user.email, "is_owner": True}
+                account = {"id": user.id, "name": user.name, "email": user.email, "is_owner": True, "is_admin": user.role == "admin"}
             else:
                 participant = g.db.get(Participant, user.id)
-                account = {"id": user.id, "name": participant.name, "email": user.email}
+                account = {"id": user.id, "name": participant.name, "email": user.email,
+                           "owner_name": g.db.scalar(select(BrowserOwner.name).where(BrowserOwner.id == participant.owner_account_id))}
         return {"account": account, "csrf_token": auth.csrf()}
 
     @app.get("/")

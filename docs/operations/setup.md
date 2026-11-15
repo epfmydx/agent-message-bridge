@@ -4,6 +4,8 @@ Run the commands below from the repository root in Bash. Use Python 3.15 and a P
 
 ## Generate private configuration
 
+These generator steps are for a fresh installation. For an existing v0.1.x installation, follow the [migration procedure](migration-v01.md) and retain its existing keys instead.
+
 Keep actual configuration and credentials outside the checkout. Install the pinned dependencies:
 
 ```sh
@@ -17,23 +19,22 @@ Generate the initial private files, replacing the synthetic addresses and origin
 BRIDGE_RUNTIME_DIR="$HOME/.config/agent-message-bridge"
 .venv/bin/python -m scripts.setup_runtime "$BRIDGE_RUNTIME_DIR" \
   --base-url https://bridge.example.com \
-  --agent-a-email agent-a@example.com --agent-b-email agent-b@example.com \
-  --owner-email owner@example.com
+  --admin-email admin@example.com
 ```
 
-Passwords are prompted. Secrets are written into the private directory rather than printed. The helper refuses a destination inside source and refuses overwriting existing runtime files. It creates participant authentication material, separate owner login, database/session/encryption material and an API-only origin secret. It does not create a PostgreSQL role/database or configure a proxy.
+Passwords are prompted. Secrets are written into the private directory rather than printed. The helper refuses a destination inside source and refuses overwriting existing runtime files. It creates an initial admin login, database/session/encryption material and an API-only origin secret. Create participant profiles in the owner interface after initialization. It does not create a PostgreSQL role/database or configure a proxy.
 
 | Generated file | Purpose |
 | --- | --- |
 | `.env` | Common settings and Compose interpolation paths. Its database host is the Compose service `postgres`, and `BRIDGE_CONFIG` is the container path `/run/bridge/config.json`. |
-| `config.json` | Participant/owner metadata and references to credential environment variables. |
+| `config.json` | Initial admin metadata and its password-hash environment reference. |
 | `admin.env` | API-only origin secret and initially empty trusted-proxy CIDRs. Fill actual gateway CIDRs before browser sign-in. |
 
 The checked-in [`.env.example`](../../.env.example), [`admin.env.example`](../../admin.env.example) and [`config.example.json`](../../config.example.json) are manual templates, not generated credentials or a ready deployment. The generated `.env` already contains `POSTGRES_PASSWORD`, `BRIDGE_ENV_FILE`, `BRIDGE_CONFIG_FILE` and `BRIDGE_ADMIN_ENV_FILE`, which Compose requires. Keep its Compose settings unchanged when also running direct Python processes.
 
-`DATABASE_URL`, `BASE_URL`, `SESSION_SECRET` and `ENCRYPTION_KEY` are required. Configuration references must also exist: the initial example uses `AGENT_A_API_KEY`, `AGENT_B_PASSWORD_HASH` and `OWNER_PASSWORD_HASH`. This includes both participant and owner references, not only the four common values. Preserve `ENCRYPTION_KEY` while stored callback secrets depend on it.
+`DATABASE_URL`, `BASE_URL`, `SESSION_SECRET` and `ENCRYPTION_KEY` are required. The initial admin password hash is referenced by `ADMIN_PASSWORD_HASH`. Preserve session and encryption keys; stored callback secrets depend on the encryption key. Storage uses the complete `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` set, or leaves all empty.
 
-`webhook_participant_id` resolves to `WEBHOOK_PARTICIPANT_ID` and selects the inherited legacy bearer-webhook recipient; `WEBHOOK_URL` and `WEBHOOK_TOKEN` remain its separate outgoing settings while the profile override is NULL. No environment migration is required. Until configured, eligible inherited deliveries retry with `webhook_not_configured`; stored messages remain readable. An owner may configure each active profile through Profiles → Notifications or the optional Add profile controls. Explicit disable prevents legacy fallback. Use the receiver's dedicated token, never the origin secret or participant login/API credential. Signed MCP subscriptions remain participant-managed and independent. Storage uses the complete `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` set, or leaves all empty.
+Existing v0.1.x installations must use the offline [migration procedure](migration-v01.md), which transfers inherited callback settings from the protected old environment. New profile notifications are managed in Profiles → Notifications. Use a dedicated outbound token, separate from the origin secret and participant credentials.
 
 ## Direct Python processes
 
@@ -59,13 +60,13 @@ set +a
 unset CLOUDFLARE_ORIGIN_SECRET TRUSTED_PROXY_CIDRS
 ```
 
-The override must be loaded last. Before continuing, confirm that the private URL names your intended server and that `BRIDGE_CONFIG` names the host file; do not print either file into logs or issues. Initialize before starting the processes:
+The override must be loaded last. Before continuing, confirm that the private URL names your intended server and that `BRIDGE_CONFIG` names the host file; do not print either file into logs or issues. For an existing v0.1.x database, first complete the offline [migration](migration-v01.md); `init-db` is not a substitute. For a new database, initialize before starting the processes:
 
 ```sh
 .venv/bin/python -m bridge init-db
 ```
 
-Successful initialization prints `Bridge configuration synchronized`. Running it again is idempotent. `sync-config` synchronizes configured identities after initialization; it does not upgrade schema.
+Successful initialization prints `Bridge configuration synchronized`. Running it again is idempotent. `sync-config` synchronizes the configured initial admin; it does not replace migration or upgrade schema.
 
 In the API terminal, repeat the shared loader, load the separate API settings and start the server:
 
@@ -110,9 +111,9 @@ See the [chart prerequisites and environment checklist](../../charts/agent-messa
 
 Before opening `/login`, complete the [browser origin configuration](cloudflare.md#configure-the-complete-origin-path), including actual app-facing proxy CIDRs in the API settings. An empty generated trust list intentionally returns `403 cloudflare_proxy_required`, even on localhost or Compose; the [denial guide](cloudflare.md#diagnose-a-denied-browser-request) explains the checks. Health or machine API success does not mean browser origin setup is complete. There is no unprotected browser-development switch; the local synthetic checks below exercise the contract without a live edge.
 
-After the trusted HTTPS path works, sign in as the separate owner and open Profiles → Add profile. Choose OAuth/email login (email/password required) or API key only (email optional). A generated key is displayed once and stored only as a hash. The owner receives no participant/API identity, cannot consent for a participant and does not add profiles to existing threads. Any authenticated participant can create a new private pair thread. Optional notification controls are independent of the authentication method; the [browser guide](../api/browser.md#owner-profile-notifications) describes enable, replacement and disable. Saved URLs are private and tokens are Fernet-encrypted with the existing `ENCRYPTION_KEY`; retain the current key. Only new actionable messages notify, with no history backfill.
+After the trusted HTTPS path works, sign in as the initial admin. The admin can issue a single-use invitation for another owner; owners create and manage their own profiles. New profiles receive public routing addresses. See the [browser guide](../api/browser.md) for reachability, credentials, notifications and deactivation. Owners cannot consent for a participant or add a profile to an existing thread.
 
-Database-managed profiles survive `sync-config`; configured removal/password or key rotation retains revocation semantics. Profiles → Credentials manages existing bridge passwords and API keys separately from notification tokens. Password resets end participant browser/OAuth sessions; replacement API keys support handover before selected-key revocation. Unchanged config sync preserves owner credential edits, while an explicit configured API-key change/removal revokes all profile service keys and their subscriptions. Configuration cannot take over a database-managed profile. Keep stable IDs separate from display names. Client hosts retain their own authority; do not seed fictional conversations into a live deployment merely to read them.
+Profiles are database-managed. Password resets end participant browser/OAuth sessions; replacement API keys support handover before selected-key revocation. Keep each owner’s private labels and contact emails separate from public routing addresses.
 
 For local synthetic guard and browser-contract checks, without configuring a real edge:
 
@@ -124,52 +125,6 @@ These tests supply synthetic trusted-peer/header values and do not establish a p
 
 ## Schema and recovery
 
-`init-db` creates missing tables and applies explicit idempotent upgrades before syncing config. Existing-schema support includes profile provenance, nullable key-only email, unique creation-token hashes and durable delivery/login state. PostgreSQL column/table upgrades use transactions with bounded lock waits. The dedicated browser/delivery/login index upgrades use separately coordinated concurrent PostgreSQL builds. Initialization must succeed before starting the new runtime. SQLite tests cover retained data/views/triggers/FKs and rollback. `sync-config` alone is not a schema upgrade.
+Existing public v0.1.0 and v0.1.1 databases require the explicit offline [migration](migration-v01.md) before `init-db`. Do not start old and new processes together. Back up the database, protected configuration and object storage before migration. Retain the original origin and session/encryption keys for continuity, and verify credentials and callbacks in your own environment before cutover.
 
-For profile webhooks, run the new runtime's `init-db` successfully before upgrading **all API and worker processes**. It additively introduces nullable `participants.webhook_enabled`, `webhook_url` and `webhook_token`, non-null `participants.webhook_generation` with default 1, nullable `deliveries.webhook_generation`, and the active partial `ix_deliveries_due` index. Existing messages, memberships and delivery data are retained. Keep current credentials and encryption/session keys; no key rotation or destructive schema rollback is required. Wait until every API and worker process uses the upgraded runtime before enabling or changing profile webhooks; older API writers omit the generation snapshot and older workers ignore the override.
-
-An older runtime can serve the retained schema only while the inherited legacy configuration is unchanged and no profile overrides, new callbacks or credential controls have been used. Its worker ignores profile overrides and explicit disable, and its authentication code does not understand additional keys. Retain the expanded schema and data for compatible recovery. A request already in flight during a settings change may still arrive; generation fencing prevents its late response from accepting stale work, not the external receipt itself.
-
-Use the intended runtime's `init-db` before that runtime. Retain expanded schema and credentials for a compatible runtime rollback; older provenance-unaware initialization/sync can disable owner-created profiles and erase API-key hashes. Do not run it during fallback. Only one public release currently exists; existing-schema tests are not evidence of an upgrade between public releases.
-
-Do not configure automatic old-runtime rollback for this upgrade. Once candidate API rollout may have started, prefer a compatible forward fix. A point-in-time unused-state check is not a credential-write fence; an owner could change credentials immediately afterward. A prior-runtime fallback needs a separately established fence held through cutover and verification of both credential and notification compatibility. Suppressing Helm hooks alone does not provide that fence or make older code understand additional keys. This guide makes no production rollback claim. Never attach the installation to an unrelated database.
-
-### Owner credential schema upgrade
-
-The new `init-db` adds six `oauth_users` fields: `credential_generation`,
-`credential_baseline_set`, `configured_password_hash`, `configured_api_key_hash`,
-`password_source` and `api_key_source`. It also creates `participant_api_keys`
-and `credential_operations`, with their unique/hash/owner indexes. The first
-upgrade snapshots existing configured hashes; repeated initialization does not
-replace that baseline with later owner changes. Existing effective credentials,
-identities, memberships and callback configuration are retained.
-
-Initialize successfully before upgrading every API/worker process. Do not expose
-the new credential controls while older processes remain. No credential rotation
-or extra runtime configuration is required by this schema upgrade. Unchanged
-`sync-config` preserves owner edits; an explicitly changed configured credential
-remains authoritative, as described in [authentication](../api/authentication.md#owner-credential-management).
-
-After controls are used, older sync code can overwrite UI passwords or restore a
-retired configured key. Old runtimes also ignore added keys. Keep the expanded
-schema, current credentials and encryption/session keys; recover using compatible
-code. Do not run old `init-db`/`sync-config`, drop credential records or restore an
-entire older database as an automatic recovery step.
-
-### Informational MCP notifications
-
-New messages with either `needs_reply` value receive recipient sequences and
-can notify active recipient MCP subscriptions. False is informational: receiving
-clients read and deduplicate it without claiming, delegating work or replying
-automatically. Update receiving routines to honor this branch. Profile bearer
-webhooks keep their existing true-only contract.
-
-This change adds no schema or backfill. Older silent rows retain NULL recipient
-sequences and remain excluded from first subscription, refresh and replay.
-Existing cursors and event identities remain valid. Upgrade all API and worker
-processes before relying on the new behavior: old API writers still omit false
-receipts, and an old subscription refresh can miss a new false-message gap until
-refreshed on compatible code. Retain current subscriptions and signing secrets;
-no new receiver registration is required by the upgrade.
-
-Work claims do not auto-expire. After a crash, inspect the prior outcome before `release-claim` for an exact message/claim; do not choose a new claim ID to bypass active work. Queued notifications are at least once; callback acceptance is receipt rather than completion. See [the API](../api/contract.md).
+Upgrade every API and worker process before using new controls or relying on generation fencing. An in-flight callback may still arrive after a settings change. Older code cannot safely interpret the new ownership, credential and notification state; prefer a compatible forward fix. Restore a consistent protected backup only as an intentional recovery operation, accounting for any data written after it. This guide makes no production rollback claim.
