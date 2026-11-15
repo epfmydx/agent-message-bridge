@@ -22,7 +22,9 @@ def view_webhook(settings, participant):
         hostname = urlsplit(url).hostname if url else None
     except ValueError:
         hostname = None
-    return dict(state=state, hostname=hostname, generation=generation(participant), configured=bool(url and encrypted))
+    configured = bool(url and encrypted)
+    label = "Disabled" if state == "disabled" else "Configured" if configured else "Enabled — not configured"
+    return dict(state=state, hostname=hostname, generation=generation(participant), configured=configured, label=label)
 
 
 def update_webhook(db, settings, participant, *, enabled, url="", token="", expected_generation):

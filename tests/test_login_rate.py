@@ -275,9 +275,9 @@ def test_owner_participant_and_oauth_browser_logins_are_counted(rate_owner_app, 
                   scope="bridge:messages", resource=resource, state="synthetic-state",
                   code_challenge=challenge, code_challenge_method="S256")
     start = oauth.get("/oauth/authorize", base_url=CANONICAL, headers=origin_headers(), query_string=fields)
-    assert start.status_code == 302 and start.location == "/login"
-    page = oauth.get("/login", base_url=CANONICAL, headers=origin_headers())
-    response = post_login(oauth, data={"csrf": csrf_from(page), "email": "agent-b",
+    assert start.status_code == 302 and start.location == "/login?mode=bot"
+    page = oauth.get(start.location, base_url=CANONICAL, headers=origin_headers())
+    response = post_login(oauth, data={"csrf": csrf_from(page), "mode": "bot", "email": "agent-b",
                                        "password": "synthetic-password-agent-b"})
     assert response.status_code == 302 and response.location.startswith("/oauth/authorize?")
     assert len(counter(rate_owner_app).attempts) == 3

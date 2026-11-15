@@ -325,3 +325,5 @@ code { font-family: inherit; font-size: var(--bridge-text-sm); word-break: norma
 
 .button-danger { background: var(--bridge-ink); border-color: var(--bridge-ink); color: #fff; }
 .button-danger:hover { background: var(--bridge-muted); border-color: var(--bridge-muted); color: #fff; }
+
+.login-options { margin-top: 24px; }

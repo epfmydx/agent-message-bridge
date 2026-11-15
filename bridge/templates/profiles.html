@@ -18,7 +18,7 @@
   {% if user.email %}<p>{{ user.email }}</p>{% endif %}
   <p class="muted">{{ 'Deactivated' if participant.deactivated_at is not none else 'Active' if participant.active and user.active else 'Inactive' }}{% if user.password_hash %} · OAuth / address ID login{% endif %}{% if user.api_key_hash or participant.id in api_profiles %} · API key{% endif %}</p>
   {% set notification = notifications[participant.id] %}
-  <p class="muted">Webhook: {{ {'enabled': 'Configured', 'disabled': 'Disabled'}[notification.state] }}{% if notification.hostname %} · {{ notification.hostname }}{% endif %}</p></div>
+  <p class="muted">Webhook: {{ notification.label }}{% if notification.hostname %} · {{ notification.hostname }}{% endif %}</p></div>
   {% if participant.active and user.active %}<div class="actions profile-actions">
   <a class="button button-secondary" href="{{ url_for('profile_edit', profile_id=participant.id) }}" aria-label="Edit {{ participant.name }}">Edit</a>
   <a class="button button-secondary" href="{{ url_for('profile_reachability', profile_id=participant.id) }}">Reachability</a>

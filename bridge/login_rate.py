@@ -128,4 +128,4 @@ def install_login_limiter(app):
             app.logger.error("login_rate_unavailable")
             return jsonify(error="login_temporarily_unavailable"), 503, {"Retry-After": "10"}
         if retry:
-            return jsonify(error="login_rate_limited", message="Too many sign-in attempts. Try again shortly."), 429, {"Retry-After": str(retry)}
+            return jsonify(error="login_rate_limited", message="Too many sign-in or registration attempts. Try again shortly."), 429, {"Retry-After": str(retry)}

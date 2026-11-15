@@ -11,7 +11,7 @@ from authlib.integrations.flask_oauth2 import AuthorizationServer
 from authlib.oauth2.rfc6749.errors import InvalidRequestError, OAuth2Error
 from authlib.oauth2.rfc6749.grants import AuthorizationCodeGrant, RefreshTokenGrant
 from authlib.oauth2.rfc7636 import CodeChallenge
-from flask import abort, current_app, g, jsonify, redirect, render_template, request, session
+from flask import abort, current_app, g, jsonify, redirect, render_template, request, session, url_for
 from sqlalchemy import select, update
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -377,6 +377,13 @@ def install_auth(app):
     @app.route("/login", methods=["GET", "POST"])
     def login():
         error = None
+        query_modes = request.args.getlist("mode")
+        form_modes = request.form.getlist("mode") if request.method == "POST" else []
+        modes = form_modes or query_modes or ["auto"]
+        mode = modes[0] if len(modes) == 1 and (not form_modes or not query_modes or form_modes == query_modes) else "invalid"
+        valid_mode = mode in ("auto", "owner", "bot")
+        if request.method == "GET" and not valid_mode:
+            abort(400)
         if request.method == "POST":
             check_csrf()
             identifier = request.form.get("email", "").strip()
@@ -391,8 +398,10 @@ def install_auth(app):
                     method = account.password_hash.split("$", 1)[0]
                     if method not in dummy_password_hashes:
                         dummy_password_hashes[method] = generate_password_hash(secrets.token_urlsafe(32), method=method)
-            owner = next((account for account in owners if account.email == email), None)
-            user = owner or next((account for account in users if account.id == identifier), None)
+            # The explicit intent resolves legacy address/email collisions;
+            # never choose an identity by trying a second password after failure.
+            owner = next((account for account in owners if account.email == email), None) if valid_mode and mode != "bot" else None
+            user = owner or (next((account for account in users if account.id == identifier), None) if valid_mode and mode != "owner" else None)
             actual_hash = user.password_hash if user and user.password_hash else ""
             actual_method = actual_hash.split("$", 1)[0]
             valid = False
@@ -416,7 +425,7 @@ def install_auth(app):
                 return redirect(target)
             error = "Sign-in details are incorrect."
         return render_template("login.html", csrf_token=csrf(), error=error, email=request.form.get("email", ""),
-                               registration_complete=session.pop("registration_complete", False))
+                               login_mode=mode if valid_mode else "auto", registration_complete=session.pop("registration_complete", False))
 
     @app.post("/logout")
     def logout():
@@ -452,7 +461,7 @@ def install_auth(app):
             if request.method != "GET":
                 abort(401)
             session["authorize_next"] = "/oauth/authorize?"+request.query_string.decode("ascii")
-            return redirect("/login")
+            return redirect(url_for("login", mode="bot"))
         if request.method == "POST":
             check_csrf()
             return server.create_authorization_response(grant=grant, grant_user=user if payload.get("approve") == "yes" else None)

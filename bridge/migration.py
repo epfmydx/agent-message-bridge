@@ -48,10 +48,59 @@ def _rows(connection, table):
     return list(connection.execute(text("SELECT * FROM " + table)).mappings())
 
 
+
+def _plain_foreign_keys(inspector, table, *, legacy=True):
+    """Known releases use plain, immediate FKs; rebuilding must not erase policy."""
+    metadata = Base.metadata.tables[table]
+    expected = set() if legacy and table == "participants" else {
+        (tuple(element.parent.name for element in constraint.elements),
+         next(iter(constraint.elements)).column.table.name,
+         tuple(element.column.name for element in constraint.elements))
+        for constraint in metadata.foreign_key_constraints}
+    actual = inspector.get_foreign_keys(table)
+    shapes = {(tuple(fk["constrained_columns"]), fk["referred_table"], tuple(fk["referred_columns"])) for fk in actual}
+    if shapes != expected or len(actual) != len(expected):
+        raise ValueError("Unsupported or missing required foreign-key constraint")
+    for fk in actual:
+        if fk.get("referred_schema") not in (None, inspector.default_schema_name):
+            raise ValueError("Unsupported foreign-key target schema")
+        for option, value in fk.get("options", {}).items():
+            if value in (None, False):
+                continue
+            if option in ("ondelete", "onupdate") and str(value).upper() == "NO ACTION":
+                continue
+            if option == "initially" and str(value).upper() == "IMMEDIATE":
+                continue
+            if option == "match" and str(value).upper() in ("SIMPLE", "NONE"):
+                continue
+            raise ValueError("Unsupported foreign-key actions or deferrability")
+
+
+def _credential_tables(inspector, tables):
+    for table in {"participant_api_keys", "credential_operations"} & tables:
+        metadata = Base.metadata.tables[table]
+        if ({column["name"] for column in inspector.get_columns(table)} != set(metadata.columns.keys())
+                or inspector.get_pk_constraint(table)["constrained_columns"] != [column.name for column in metadata.primary_key]
+                or inspector.get_check_constraints(table)):
+            raise ValueError("Unsupported legacy credential-table shape")
+        for column in inspector.get_columns(table):
+            known = metadata.c[column["name"]]
+            if (column["type"]._type_affinity is not known.type._type_affinity
+                    or getattr(column["type"], "length", None) != getattr(known.type, "length", None)
+                    or column["nullable"] != known.nullable or column.get("default") is not None):
+                raise ValueError("Unsupported legacy credential column type or nullability")
+        unique = inspector.get_unique_constraints(table) + [i for i in inspector.get_indexes(table) if i.get("unique")]
+        expected = {("key_hash",)} if table == "participant_api_keys" else set()
+        if {tuple(index["column_names"]) for index in unique} != expected:
+            raise ValueError("Unsupported legacy credential uniqueness")
+        if any(index.get("dialect_options", {}).get(inspector.bind.dialect.name + "_where") is not None for index in unique):
+            raise ValueError("Unsupported partial credential uniqueness")
+        _plain_foreign_keys(inspector, table)
+
 def _preflight(connection, mapping, digest, legacy_path, environ):
     inspector = inspect(connection)
     if connection.dialect.name == "sqlite":
-        for table in ("participants", "oauth_users", "browser_owners"):
+        for table in ("participants", "oauth_users", "browser_owners", "participant_api_keys", "credential_operations"):
             if not inspector.has_table(table):
                 continue
             for index in connection.exec_driver_sql("PRAGMA index_list(" + table + ")").mappings():
@@ -66,6 +115,11 @@ def _preflight(connection, mapping, digest, legacy_path, environ):
     if MigrationReceipt.__tablename__ in tables:
         receipt = connection.execute(select(MigrationReceipt.__table__).where(MigrationReceipt.name == NAME)).mappings().first()
         if receipt:
+            if not {"participant_api_keys", "credential_operations"} <= tables:
+                raise ValueError("Migrated credential tables are incomplete")
+            _credential_tables(inspector, tables)
+            for table in ("participants", "oauth_users", "browser_owners"):
+                _plain_foreign_keys(inspector, table, legacy=False)
             if receipt["mapping_hash"] != digest:
                 raise ValueError("This database was migrated with a different ownership mapping")
             expected = {p["id"]: (p["owner_id"], p["stable_id"]) for p in mapping["participants"]}
@@ -106,7 +160,14 @@ def _preflight(connection, mapping, digest, legacy_path, environ):
             or columns["oauth_users"] not in (U_BASE, U_BASE | U_CREDENTIAL)
             or columns["browser_owners"] != O_BASE):
         raise ValueError("Unsupported or partially migrated identity columns")
-    for table in required - {"participants", "oauth_users", "browser_owners"}:
+    optional = tables & {"participant_api_keys", "credential_operations"}
+    delivery_columns = {c["name"] for c in inspector.get_columns("deliveries")}
+    version_010 = columns["participants"] == P_BASE and columns["oauth_users"] == U_BASE and not optional and "webhook_generation" not in delivery_columns
+    version_011 = columns["participants"] == P_BASE | P_WEBHOOK and columns["oauth_users"] == U_BASE | U_CREDENTIAL and optional == {"participant_api_keys", "credential_operations"} and "webhook_generation" in delivery_columns
+    if not (version_010 or version_011):
+        raise ValueError("Expected a complete public 0.1.0 or 0.1.1 schema")
+    _credential_tables(inspector, tables)
+    for table in (tables & LEGACY_TABLES) - {"participants", "oauth_users", "browser_owners"}:
         expected = set(Base.metadata.tables[table].columns.keys())
         actual = {c["name"] for c in inspector.get_columns(table)}
         acceptable = (expected, expected - {"webhook_generation"}) if table == "deliveries" else (expected,)
@@ -132,9 +193,8 @@ def _preflight(connection, mapping, digest, legacy_path, environ):
         unique = inspector.get_unique_constraints(table) + [i for i in inspector.get_indexes(table) if i.get("unique")]
         if any(tuple(c["column_names"]) not in allowed for c in unique):
             raise ValueError("Unsupported identity uniqueness constraint")
-        expected_fks = {("id",): ("participants", ("id",))} if table == "oauth_users" else {}
-        if any(expected_fks.get(tuple(f["constrained_columns"])) != (f["referred_table"], tuple(f["referred_columns"])) for f in inspector.get_foreign_keys(table)):
-            raise ValueError("Unsupported identity foreign-key constraint")
+    for table in tables & LEGACY_TABLES:
+        _plain_foreign_keys(inspector, table)
     owners, participants, users = (_rows(connection, t) for t in ("browser_owners", "participants", "oauth_users"))
     by_id = {p["id"]: p for p in participants}
     assignments = {p["id"]: p for p in mapping["participants"]}

@@ -1,10 +1,12 @@
 # Authentication
 
-Agent Message Bridge binds machine requests to participant credentials. Owners are separate browser identities; each manages their own profiles and sees conversations involving their bots. An admin has the same data scope plus invitation management. The private configuration bootstraps only the initial admin; owners register through single-use, seven-day invitations. Invitations are stored as hashes and revealed once.
+Agent Message Bridge binds machine requests to participant credentials. Owners are separate browser identities; each manages their own profiles and sees conversations involving their bots. An admin has the same data scope plus invitation management. The private configuration bootstraps only the initial admin; owners register through single-use, seven-day invitations. Codes are hashed for verification. A temporary plaintext reveal record expires after ten minutes and is deleted when shown or during subsequent invitation creation, listing or reveal cleanup; expiry does not guarantee immediate physical deletion, and idle expired records or backups can retain the value.
 
 Configure the [mandatory Cloudflare origin path](../operations/cloudflare.md) before browser sign-in, registration, consent or connections. Machine bearer authentication remains separate. Owners cannot send, claim, grant OAuth consent or gain participant membership through their browser sessions.
 
 New bot addresses use `amb_` plus 32 URL-safe characters; migrated IDs remain unchanged. A bot signs in with its routing address and password, not its private contact email. Private stable labels and emails are owner-scoped. The [migration guide](../operations/migration-v01.md) describes credential continuity requirements.
+
+The normal `/login` flow selects the account type automatically. Explicit bot and owner sign-in are also available at `/login?mode=bot` and `/login?mode=owner`. Use bot sign-in if a migrated bot address resembles or matches an owner email. Explicit modes select only the named account type, without falling back to the other type; a failed submission keeps the selection. OAuth authorization sends an unauthenticated user to bot sign-in and preserves the authorization return.
 
 ## OAuth connection
 
@@ -53,7 +55,7 @@ cookies for HTTPS deployments. Login, consent, disconnect and logout forms requi
 CSRF tokens. Names and redirect URLs are escaped in HTML. Login attempts verify a password hash for every configured hashing method, including unknown emails and identities without a password; dummy hashes are prepared once for those methods to avoid the absent-account timing shortcut. Authentication pages
 send no-store, no-referrer and restrictive content-security headers.
 
-The login burst policy applies only to `POST /login` on
+The login burst policy shares one per-IP budget across `POST /login` and `POST /register` on
 the configured `BASE_URL` hostname. DNS names are normalized with UTS46 nontransitional IDNA, including equivalent root separators; IP literals are normalized separately. Ten
 submissions per verified client IP are admitted in a rolling ten-second window.
 The next submission receives HTTP429 and starts a ten-second cooldown; requests
@@ -91,7 +93,7 @@ handover. Register subscriptions with the replacement key before revoking the ol
 This is owner-only administration, separate from the owner's own login,
 external provider credentials and outbound webhook tokens. It does not grant
 OAuth consent, change thread membership or provide participant connection controls.
-Profile email and stable label are edited separately. Password reset ends existing participant browser
+Profile name and contact email are edited separately; the chosen private stable ID is fixed. Password reset ends existing participant browser
 sessions and OAuth connection families, including their subscriptions, while
 leaving service keys and profile webhooks unchanged.
 An already authenticated/in-flight operation can finish; resetting credentials

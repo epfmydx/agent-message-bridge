@@ -12,7 +12,8 @@
   {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
   <input type="hidden" name="csrf" value="{{ csrf_token }}">
   <input type="hidden" name="expected_generation" value="{{ notification.generation }}">
-  <p class="profile-current">Current webhook: <strong>{{ {'enabled': 'Configured', 'disabled': 'Disabled'}[notification.state] }}</strong>{% if notification.hostname %} · {{ notification.hostname }}{% endif %}</p>
+  <p class="profile-current">Current webhook: <strong>{{ notification.label }}</strong>{% if notification.hostname %} · {{ notification.hostname }}{% endif %}</p>
+  {% if notification.state == 'enabled' and not notification.configured %}<p class="credential-notice" role="status">This webhook is enabled but has no destination or token. Enter both fields to finish setup. Saving settings stops pending notifications from the previous settings; later messages use the saved destination.</p>{% endif %}
   <fieldset class="profile-auth-methods"><legend>Webhook delivery</legend>
     <label><input type="checkbox" name="webhook_enabled" value="1"{% if notification.state == 'enabled' %} checked{% endif %} aria-describedby="webhook-enabled-help"> Enable webhook notifications</label>
     <p id="webhook-enabled-help" class="muted">For a custom receiver using the documented JSON payload and bearer authentication. The receiver must reply with HTTP 200 exactly; 201 and 204 are rejected. Timeouts, connection failures, 5xx, 408, 425 and 429 are retried. MCP client subscriptions remain managed by each client.</p>

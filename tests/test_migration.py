@@ -329,3 +329,105 @@ def test_unrecognized_email_uniqueness_rejects_initial_and_replay_migrations(leg
     before=snapshot(f.engine);schema_before=schema_snapshot(f.engine)
     with pytest.raises(ValueError):migrate_v01(f.engine,f.mapping,legacy_config=f.legacy_config,environ=f.env,apply=True)
     assert snapshot(f.engine)==before and schema_snapshot(f.engine)==schema_before
+
+
+@pytest.mark.parametrize('table,column',[('participant_api_keys','key_hash'),('credential_operations','purpose')])
+def test_malformed_optional_credentials_fail_check_and_apply_before_mutation(legacy,table,column):
+    f=legacy
+    if f.version!='v0.1.1':pytest.skip('Credential tables were added in 0.1.1')
+    with f.engine.begin() as c:c.exec_driver_sql('ALTER TABLE '+table+' RENAME COLUMN '+column+' TO changed_column')
+    before=snapshot(f.engine);schema_before=schema_snapshot(f.engine)
+    for apply in (False,True):
+        with pytest.raises(ValueError):migrate(f,apply=apply)
+        assert snapshot(f.engine)==before and schema_snapshot(f.engine)==schema_before
+
+
+def test_incomplete_historical_release_combination_is_rejected(legacy):
+    f=legacy
+    if f.version=='v0.1.0':
+        from bridge.models_auth import APIKey
+        APIKey.__table__.create(f.engine)
+    else:
+        with f.engine.begin() as c:c.exec_driver_sql('DROP TABLE credential_operations')
+    before=snapshot(f.engine);schema_before=schema_snapshot(f.engine)
+    for apply in (False,True):
+        with pytest.raises(ValueError):migrate(f,apply=apply)
+        assert snapshot(f.engine)==before and schema_snapshot(f.engine)==schema_before
+
+
+@pytest.mark.parametrize('policy',['ON DELETE CASCADE','ON UPDATE CASCADE','DEFERRABLE INITIALLY DEFERRED','missing'])
+def test_changed_or_missing_user_fk_contract_fails_without_schema_or_data_change(legacy,policy):
+    f=legacy
+    with f.engine.begin() as c:
+        if f.engine.dialect.name=='sqlite':
+            definition=c.scalar(text("SELECT sql FROM sqlite_master WHERE type='table' AND name='oauth_users'"))
+            edge='REFERENCES participants (id)'
+            assert definition.count(edge)==1
+            if policy=='missing':
+                import re
+                definition,count=re.subn(r',?\s*FOREIGN KEY\(id\) REFERENCES participants \(id\)','',definition)
+                assert count==1
+            else:definition=definition.replace(edge,edge+' '+policy)
+            version=c.exec_driver_sql('PRAGMA schema_version').scalar()
+            c.exec_driver_sql('PRAGMA writable_schema=ON')
+            c.execute(text("UPDATE sqlite_master SET sql=:sql WHERE name='oauth_users' AND type='table'"),{'sql':definition})
+            c.exec_driver_sql('PRAGMA writable_schema=OFF')
+            c.exec_driver_sql('PRAGMA schema_version='+str(version+1))
+        else:
+            name=inspect(c).get_foreign_keys('oauth_users')[0]['name']
+            c.exec_driver_sql('ALTER TABLE oauth_users DROP CONSTRAINT '+c.dialect.identifier_preparer.quote(name))
+            if policy!='missing':c.exec_driver_sql('ALTER TABLE oauth_users ADD FOREIGN KEY (id) REFERENCES participants(id) '+policy)
+    before=snapshot(f.engine);schema_before=schema_snapshot(f.engine)
+    for apply in (False,True):
+        with pytest.raises(ValueError):migrate(f,apply=apply)
+        assert snapshot(f.engine)==before and schema_snapshot(f.engine)==schema_before
+
+
+def test_real_migrated_unconfigured_webhook_rendering_distinguishes_enablement(legacy):
+    f=legacy;f.env.pop('WEBHOOK_URL');f.env.pop('WEBHOOK_TOKEN');migrate(f,apply=True)
+    app=create_app(f.settings);app.config['TESTING']=True
+    try:
+        client=app.test_client();page=client.get('/login',base_url=BASE,headers=HEADERS)
+        signed=client.post('/login',base_url=BASE,headers=HEADERS,data=dict(csrf=hidden(page,'csrf'),email='owner-a@example.com',password='synthetic-password'))
+        assert signed.status_code==302
+        path='/profiles/notifications?profile_id=agent-a'
+        profiles=client.get('/profiles',base_url=BASE,headers=HEADERS)
+        settings=client.get(path,base_url=BASE,headers=HEADERS)
+        expected='Enabled — not configured'.encode()
+        assert expected in profiles.data and expected in settings.data
+        assert b'Enter both fields to finish setup.' in settings.data
+        assert b'Saving settings stops pending notifications from the previous settings' in settings.data
+        for enabled,label in [(False,b'Disabled'),(True,b'Configured')]:
+            with app.extensions['sessions'].begin() as db:
+                p=db.get(Participant,'agent-a');p.webhook_enabled=enabled
+                p.webhook_url='https://configured.example.com/hook'
+                p.webhook_token=Fernet(f.settings['ENCRYPTION_KEY'].encode()).encrypt(b'synthetic-private-token').decode()
+            rendered=client.get(path,base_url=BASE,headers=HEADERS)
+            assert b'Current webhook: <strong>'+label+b'</strong>' in rendered.data
+            assert b'synthetic-private-token' not in rendered.data
+            assert expected not in rendered.data
+    finally:app.extensions['engine'].dispose()
+
+
+@pytest.mark.parametrize('fault',['type','nullable'])
+def test_optional_key_column_type_and_nullability_are_known_before_apply(legacy,fault):
+    f=legacy
+    if f.version!='v0.1.1':pytest.skip('Credential tables were added in 0.1.1')
+    with f.engine.begin() as c:
+        if f.engine.dialect.name=='sqlite':
+            definition=c.scalar(text("SELECT sql FROM sqlite_master WHERE type='table' AND name='participant_api_keys'"))
+            known='key_hash VARCHAR NOT NULL'
+            assert definition.count(known)==1
+            changed='key_hash INTEGER NOT NULL' if fault=='type' else 'key_hash VARCHAR'
+            definition=definition.replace(known,changed)
+            version=c.exec_driver_sql('PRAGMA schema_version').scalar()
+            c.exec_driver_sql('PRAGMA writable_schema=ON')
+            c.execute(text("UPDATE sqlite_master SET sql=:sql WHERE name='participant_api_keys' AND type='table'"),{'sql':definition})
+            c.exec_driver_sql('PRAGMA writable_schema=OFF')
+            c.exec_driver_sql('PRAGMA schema_version='+str(version+1))
+        elif fault=='type':c.exec_driver_sql('ALTER TABLE participant_api_keys ALTER COLUMN key_hash TYPE INTEGER USING 1')
+        else:c.exec_driver_sql('ALTER TABLE participant_api_keys ALTER COLUMN key_hash DROP NOT NULL')
+    before=snapshot(f.engine);schema_before=schema_snapshot(f.engine)
+    for apply in (False,True):
+        with pytest.raises(ValueError):migrate(f,apply=apply)
+        assert snapshot(f.engine)==before and schema_snapshot(f.engine)==schema_before
