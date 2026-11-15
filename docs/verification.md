@@ -1,5 +1,20 @@
 # Verification
 
+## Review repairs — 15 November 2026
+
+Runtime/test snapshot `62f35bc` repairs the independent review's four Medium findings. Sign-in now offers explicit `/login?mode=bot` and `/login?mode=owner` choices so an existing bot routing ID can equal an owner email without either identity shadowing the other. Failed bot sign-in retains its choice; OAuth uses bot mode and retains the server-owned return path. Default sign-in remains compatible, and passwords are never tried against a second identity as a fallback. Generic failure text, per-method hash work, origin/CSRF controls and the shared sign-in/registration burst budget remain covered.
+
+Migration preflight now recognizes complete known public 0.1.0/0.1.1 schema combinations and validates existing credential-table columns, types, lengths, nullability, primary keys, uniqueness and foreign keys. It requires every known plain foreign-key edge and rejects changed actions/deferrability or missing constraints before mutation. Both check and apply leave malformed schema/data unchanged. Enabled migrated callbacks without settings now show **Enabled — not configured** in Profiles and Notifications, with setup and pending-notification fencing guidance. The limiter message describes both sign-in and registration attempts.
+
+Final checks, all exit 0:
+
+- Complete SQLite: **652 passed, 34 skipped**, 172.50 seconds. Skips are 28 native PostgreSQL cases and six 0.1.0 cases for later credential/profile features.
+- Complete disposable PostgreSQL 18.6: **679 passed, 7 skipped**, 266.00 seconds. Skips are the SQLite query-plan assertion and those six legacy-feature cases. The full gates include authentication, registration, owner isolation, credentials, notification delivery and deactivation suites.
+- Focused finding regressions on SQLite: **60 passed, 6 skipped**, 11.56 seconds; PostgreSQL: **60 passed, 6 skipped**, 30.51 seconds. They exercise migrated bot/owner identifier collisions with equal and different passwords, later registration, explicit identity scopes, failed retries and OAuth consent/return, generic/hash/origin/CSRF/rate behavior, malformed optional tables and historical schema combinations, changed/missing FK contracts with unchanged schema/data, and real migrated unconfigured webhook rendering. The older limiter/OAuth test was updated to follow the intentional bot-mode redirect and passed separately; both complete gates include it.
+- Content/docs/local links, release plan `v0.2.1`, Helm lint, three JavaScript syntax checks and whitespace checks pass. Raw command/status logs remain in the orchestration task artifacts outside Git.
+
+Built-in-browser repair acceptance used the guarded synthetic loopback preview. A synthetic legacy bot and admin shared `owner@example.com` with different passwords: wrong bot password gave a generic error and preserved Bot mode; retry reached participant Messages/Connections with no owner navigation. Explicit Owner sign-in reached admin Conversations/Profiles/Account/Invitations. Profiles and Notifications showed the enabled/unconfigured state and recovery/fencing text. At 390×844, document width equaled client width (390px), with readable content and no visible overflow. Browser warning/error logs were empty; viewport reset, tab closed and preview stopped. No notification settings were submitted in this browser pass. The task-owned PostgreSQL container was removed after independent acceptance; no task preview or database service remains running. No real credentials, production database, provider delivery, publication or deployment was used.
+
 ## Integrated public 0.2.1 candidate — 15 November 2026
 
 This local candidate ports the pinned Kai Bridge 0.2.1 behavior to Agent Message Bridge, starting from the preserved public combined-profile baseline `5805f91` (which includes public `main` `317a1d0`). Neutral assets, UTC presentation, configured-origin hostname login protection, generic S3/event/header names, MIT/notices, fictional examples and the tag-only source-validation workflow are retained. No tag, push, PR, application image build/publication or deployment was performed.
